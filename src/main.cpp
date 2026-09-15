@@ -14,16 +14,23 @@ const unsigned long HEARTBEAT_INTERVAL_MS = 500;
 unsigned long lastHeartbeatToggle = 0;
 bool heartbeatState = false;
 
-bool wasConnected = false;
-
 void ledOn()  { digitalWrite(LED_PIN, LOW); }
 void ledOff() { digitalWrite(LED_PIN, HIGH); }
 
+// Schnelles Blinken (fürs Senden und für den Erfolgs-Blitz)
 void blinkFast(uint8_t times, uint16_t delayMs) {
   for (uint8_t i = 0; i < times; i++) {
     ledOn(); delay(delayMs);
     ledOff(); delay(delayMs);
   }
+}
+
+// Warte-Muster: kurzer Doppel-Blitz, dann Pause — klar unterscheidbar vom Heartbeat
+void blinkWaiting() {
+  ledOn(); delay(60);
+  ledOff(); delay(80);
+  ledOn(); delay(60);
+  ledOff(); delay(600);
 }
 
 void setup() {
@@ -34,20 +41,36 @@ void setup() {
   ledOff();
 
   Serial.println("Starte Meshtastic-Verbindung...");
-  mt_set_debug(true);
-
   mt_serial_init(MT_RX_PIN, MT_TX_PIN, MT_BAUD);
+
+  // --- Handshake: warten, bis Verbindung steht ---
+  // LED blinkt im "Doppel-Blitz"-Muster, solange nicht verbunden
+  bool connected = false;
+  while (!connected) {
+    connected = mt_loop(millis());
+    if (!connected) {
+      blinkWaiting();
+    }
+  }
+
+  Serial.println(">>> VERBUNDEN mit der Node");
+
+  // --- Erfolg: 5x schnell blinken ---
+  blinkFast(5, 100);
+
+  lastHeartbeatToggle = millis();
 }
 
 void loop() {
   bool connected = mt_loop(millis());
 
-  if (connected != wasConnected) {
-    wasConnected = connected;
-    Serial.println(connected ? ">>> VERBUNDEN mit der Node" : ">>> Verbindung verloren/noch nicht da");
+  // Verbindung mittendrin verloren -> zurück ins Warte-Muster, bis sie wieder da ist
+  if (!connected) {
+    blinkWaiting();
+    return;
   }
 
-  if (connected && millis() - lastSendTime >= SEND_INTERVAL_MS) {
+  if (millis() - lastSendTime >= SEND_INTERVAL_MS) {
     lastSendTime = millis();
     blinkFast(6, 80);
 
