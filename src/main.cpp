@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <Meshtastic.h>
+#include "lage_db.h"
 
 #define MT_RX_PIN 44
 #define MT_TX_PIN 43
@@ -33,12 +34,68 @@ void blinkWaiting() {
   ledOff(); delay(600);
 }
 
+// --- Callback: wird von mt_loop() aufgerufen, wenn eine Textnachricht ankommt ---
+void onTextMessage(uint32_t from, uint32_t to, uint8_t channel, const char* text) {
+  String msg(text);
+  if (!msg.startsWith("LAGE:")) return; // alles andere ignorieren
+
+  String payload = msg.substring(5);
+  int p1 = payload.indexOf(';');
+  int p2 = payload.indexOf(';', p1 + 1);
+  int p3 = payload.indexOf(';', p2 + 1);
+  if (p1 < 0 || p2 < 0 || p3 < 0) {
+    Serial.println("Ungueltiges LAGE-Format, erwartet: LAGE:<ID|NEU>;Kategorie;Status;Text");
+    return;
+  }
+
+  String idPart = payload.substring(0, p1); idPart.trim();
+  String kategorie = payload.substring(p1 + 1, p2); kategorie.trim();
+  String status = payload.substring(p2 + 1, p3); status.trim();
+  String content = payload.substring(p3 + 1); content.trim();
+
+  char fromBuf[12];
+  snprintf(fromBuf, sizeof(fromBuf), "!%08x", from);
+  String fromNode(fromBuf);
+
+  if (idPart.equalsIgnoreCase("NEU")) {
+    int newId = lageDbCreate(kategorie, status, content, fromNode);
+    Serial.print(">>> Neue Lagemeldung angelegt, ID "); Serial.println(newId);
+  } else {
+    int id = idPart.toInt();
+    if (lageDbUpdate(id, kategorie, status, content, fromNode)) {
+      Serial.print(">>> Lagemeldung "); Serial.print(id); Serial.println(" aktualisiert");
+    } else {
+      Serial.print(">>> Update fehlgeschlagen, ID "); Serial.print(id); Serial.println(" nicht gefunden");
+    }
+  }
+  blinkFast(3, 100);
+}
+
+// --- Serial-CLI zum Prüfen der Datenbank ---
+void handleSerialCommand(const String& cmd) {
+  if (cmd == "liste") {
+    lageDbListSummary();
+  } else if (cmd.startsWith("liste kategorie ")) {
+    lageDbListSummary(cmd.substring(16), "");
+  } else if (cmd.startsWith("liste status ")) {
+    lageDbListSummary("", cmd.substring(13));
+  } else if (cmd.startsWith("detail ")) {
+    lageDbShowDetail(cmd.substring(7).toInt());
+  } else if (cmd == "help") {
+    Serial.println("Befehle: liste | liste kategorie <X> | liste status <X> | detail <ID> | help");
+  } else if (cmd.length() > 0) {
+    Serial.println("Unbekannter Befehl. 'help' fuer Uebersicht.");
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   delay(2000);
 
   pinMode(LED_PIN, OUTPUT);
   ledOff();
+
+  lageDbBegin();
 
   Serial.println("Starte Meshtastic-Verbindung...");
   mt_serial_init(MT_RX_PIN, MT_TX_PIN, MT_BAUD);
@@ -53,7 +110,9 @@ void setup() {
     }
   }
 
-  Serial.println(">>> VERBUNDEN mit der Node");
+  set_text_message_callback(onTextMessage); // NACH erfolgtem Handshake registrieren
+
+  Serial.println(">>> VERBUNDEN mit der Node. Tippe 'help' fuer CLI-Befehle.");
 
   // --- Erfolg: 5x schnell blinken ---
   blinkFast(5, 100);
@@ -62,7 +121,7 @@ void setup() {
 }
 
 void loop() {
-  bool connected = mt_loop(millis());
+  bool connected = mt_loop(millis()); // ruft bei Bedarf onTextMessage() auf
 
   // Verbindung mittendrin verloren -> zurück ins Warte-Muster, bis sie wieder da ist
   if (!connected) {
@@ -85,5 +144,11 @@ void loop() {
     lastHeartbeatToggle = millis();
     heartbeatState = !heartbeatState;
     heartbeatState ? ledOn() : ledOff();
+  }
+
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    handleSerialCommand(cmd);
   }
 }
