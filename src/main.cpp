@@ -7,7 +7,7 @@
 
 #define LED_PIN 21
 
-const unsigned long SEND_INTERVAL_MS = 20000;
+const unsigned long SEND_INTERVAL_MS = 300000; // 5 Minuten = 5 * 60 * 1000
 unsigned long lastSendTime = 0;
 
 const unsigned long HEARTBEAT_INTERVAL_MS = 500;
@@ -74,7 +74,7 @@ void loop() {
     lastSendTime = millis();
     blinkFast(6, 80);
 
-    bool ok = mt_send_text("Hallo von der ESP32-S3!");
+    bool ok = mt_send_text("Interface Test Kayna-Funkt 5min Intervall");
     Serial.print(">>> Nachricht gesendet, Erfolg: ");
     Serial.println(ok ? "JA" : "NEIN");
 
