@@ -6,6 +6,7 @@
 ![Framework](https://img.shields.io/badge/framework-Arduino%20%2F%20PlatformIO-04A098?style=flat-square)
 ![Node](https://img.shields.io/badge/mesh-Meshtastic-62B22E?style=flat-square)
 ![Status](https://img.shields.io/badge/status-prototype%20%E2%80%94%20kayna--funkt-lightgrey?style=flat-square)
+![AI Slopmaker](https://img.shields.io/badge/Anthropic%20Claude%20Sonnet%205%20High)
 
 Ein Seeed XIAO ESP32-S3 verbindet sich per UART mit einer Meshtastic-Node (Seeed XIAO nRF52) und dient als Prototyp für die Versendung und Speicherung von **Leitstellen-Lagemeldungen** — Teil des Notmeldestellen-Projekts **kayna-funkt**.
 
