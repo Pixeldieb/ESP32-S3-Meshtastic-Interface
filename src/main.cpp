@@ -15,6 +15,28 @@ const unsigned long HEARTBEAT_INTERVAL_MS = 500;
 unsigned long lastHeartbeatToggle = 0;
 bool heartbeatState = false;
 
+// --- Zustandsmodell der Säule (Issue #10) ---
+enum class SaeulenZustand {
+  STANDBY,
+  AKTIV,
+  STROMAUSFALL,
+  WARTUNG,
+  SABOTAGE
+};
+
+SaeulenZustand aktuellerZustand = SaeulenZustand::STANDBY;
+
+const char* zustandName(SaeulenZustand z) {
+  switch (z) {
+    case SaeulenZustand::STANDBY:      return "STANDBY";
+    case SaeulenZustand::AKTIV:        return "AKTIV";
+    case SaeulenZustand::STROMAUSFALL: return "STROMAUSFALL";
+    case SaeulenZustand::WARTUNG:      return "WARTUNG";
+    case SaeulenZustand::SABOTAGE:     return "SABOTAGE";
+  }
+  return "UNBEKANNT";
+}
+
 void ledOn()  { digitalWrite(LED_PIN, LOW); }
 void ledOff() { digitalWrite(LED_PIN, HIGH); }
 
@@ -81,8 +103,10 @@ void handleSerialCommand(const String& cmd) {
     lageDbListSummary("", cmd.substring(13));
   } else if (cmd.startsWith("detail ")) {
     lageDbShowDetail(cmd.substring(7).toInt());
+  } else if (cmd == "status") {
+    Serial.print("Zustand: "); Serial.println(zustandName(aktuellerZustand));
   } else if (cmd == "help") {
-    Serial.println("Befehle: liste | liste kategorie <X> | liste status <X> | detail <ID> | help");
+    Serial.println("Befehle: liste | liste kategorie <X> | liste status <X> | detail <ID> | status | help");
   } else if (cmd.length() > 0) {
     Serial.println("Unbekannter Befehl. 'help' fuer Uebersicht.");
   }
