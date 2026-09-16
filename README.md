@@ -1,6 +1,6 @@
 <div align="center">
 
-# ESP32-S3 Interface for Meshtastic
+# ESP32-S3 Interface for Meshtastic (vibe coded prototype)
 
 ![Platform](https://img.shields.io/badge/platform-ESP32--S3-10537E?style=flat-square)
 ![Framework](https://img.shields.io/badge/framework-Arduino%20%2F%20PlatformIO-04A098?style=flat-square)
