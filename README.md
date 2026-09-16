@@ -224,6 +224,22 @@ Im seriellen Monitor eintippen:
 4. Im Monitor sollte erscheinen: `>>> Neue Lagemeldung angelegt, ID X`
 5. `liste` eintippen → sollte die neue Meldung zeigen
 
+### Automatisierter Funktionstest
+
+[`scripts/test_mesh_functions.sh`](./scripts/test_mesh_functions.sh) sendet nacheinander alle aktuell unterstützten Testnachrichten (Zustandswechsel-Codes + Lagemeldungen) über einen zweiten, per USB angeschlossenen Meshtastic-Node.
+
+**Voraussetzungen:**
+- `meshtastic`-CLI installiert: `pip3 install --upgrade meshtastic`
+- Zweiter Meshtastic-Node per USB angeschlossen, **Region gesetzt** (`meshtastic --port <port> --set lora.region EU_868`) und auf demselben Kanal wie der Brain-Node
+
+**Ausführen:**
+
+```bash
+./scripts/test_mesh_functions.sh --port /dev/cu.usbmodem2101
+```
+
+Seriellen Monitor des Brain-Boards währenddessen offen halten und nach jeder gesendeten Nachricht mit `status`, `liste` bzw. `detail <ID>` gegenprüfen. Optional Wartezeit zwischen den Nachrichten anpassen: `--delay <Sekunden>` (Default: 3).
+
 ---
 
 ## 🩺 Troubleshooting
