@@ -76,6 +76,12 @@ void blinkWaiting() {
 void onTextMessage(uint32_t from, uint32_t to, uint8_t channel, const char* text) {
   String msg(text);
 
+  // TEMPORAER: rohe Sicht auf jede eingehende Nachricht zur Fehlersuche (Issue Testkampagne)
+  Serial.print("### RAW von !"); Serial.print(from, HEX);
+  Serial.print(" ch="); Serial.print(channel);
+  Serial.print(" len="); Serial.print(strlen(text));
+  Serial.print(" msg=\""); Serial.print(msg); Serial.println("\"");
+
   for (const ZustandsBefehl& befehl : ZUSTANDS_BEFEHLE) {
     if (msg.equalsIgnoreCase(befehl.code)) {
       Serial.print("!!! Befehl '"); Serial.print(befehl.code);
@@ -120,6 +126,19 @@ void onTextMessage(uint32_t from, uint32_t to, uint8_t channel, const char* text
   blinkFast(3, 100);
 }
 
+// --- Wird aufgerufen, wenn der Config-Handshake mit der Node abgeschlossen ist ---
+// mt_serial_loop() liefert in der Bibliothek IMMER true zurueck ("It's easy being
+// a serial interface") - der urspruengliche while(!connected)-Loop lief daher sofort
+// durch, ohne dass der echte want_config-Handshake je angestossen wurde. Dadurch hat
+// die Node eingehende Mesh-Nachrichten nie an den ESP32 weitergeleitet.
+bool configDone = false;
+
+void onNodeReport(mt_node_t* node, mt_nr_progress_t progress) {
+  if (progress == MT_NR_DONE || progress == MT_NR_INVALID) {
+    configDone = true;
+  }
+}
+
 // --- Serial-CLI zum Prüfen der Datenbank ---
 void handleSerialCommand(const String& cmd) {
   if (cmd == "liste") {
@@ -150,14 +169,21 @@ void setup() {
 
   Serial.println("Starte Meshtastic-Verbindung...");
   mt_serial_init(MT_RX_PIN, MT_TX_PIN, MT_BAUD);
+  mt_request_node_report(onNodeReport); // stoesst den echten want_config-Handshake an
 
-  // --- Handshake: warten, bis Verbindung steht ---
-  // LED blinkt im "Doppel-Blitz"-Muster, solange nicht verbunden
-  bool connected = false;
-  while (!connected) {
-    connected = mt_loop(millis());
-    if (!connected) {
-      blinkWaiting();
+  // --- Handshake: warten, bis Config-Austausch abgeschlossen ist ---
+  // LED blinkt im "Doppel-Blitz"-Muster, solange nicht verbunden.
+  // Timeout-Fallback: falls die Node den Handshake nie mit "fertig" beantwortet
+  // (z.B. Versions-Mismatch), nach 15s trotzdem weitermachen, statt fuer immer
+  // haengen zu bleiben - sonst ist nicht mal die lokale Serial-CLI erreichbar.
+  unsigned long handshakeStart = millis();
+  const unsigned long HANDSHAKE_TIMEOUT_MS = 15000;
+  while (!configDone) {
+    mt_loop(millis());
+    blinkWaiting();
+    if (millis() - handshakeStart > HANDSHAKE_TIMEOUT_MS) {
+      Serial.println(">>> WARNUNG: Config-Handshake nach 15s nicht abgeschlossen, mache trotzdem weiter.");
+      break;
     }
   }
 
