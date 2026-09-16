@@ -206,16 +206,7 @@ void loop() {
     return;
   }
 
-  if (millis() - lastSendTime >= SEND_INTERVAL_MS) {
-    lastSendTime = millis();
-    blinkFast(6, 80);
-
-    bool ok = mt_send_text("Interface Test Kayna-Funkt 5min Intervall");
-    Serial.print(">>> Nachricht gesendet, Erfolg: ");
-    Serial.println(ok ? "JA" : "NEIN");
-
-    lastHeartbeatToggle = millis();
-  }
+  // Periodischer Testversand deaktiviert (hat die Handshake-Fehlersuche gestoert)
 
   if (millis() - lastHeartbeatToggle >= HEARTBEAT_INTERVAL_MS) {
     lastHeartbeatToggle = millis();
