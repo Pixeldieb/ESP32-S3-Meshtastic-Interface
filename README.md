@@ -1,104 +1,247 @@
-ESP32-S3 Interface for Meshtastic
+<div align="center">
 
-Ein Lernprojekt: Ein Seeed XIAO ESP32-S3 sendet automatisch alle 20 Sekunden eine Textnachricht über eine angeschlossene Meshtastic-Node (Seeed XIAO nRF52) ins Mesh-Netzwerk — inklusive LED-Statusanzeige, damit man sieht, dass alles läuft.
+# ESP32-S3 Interface for Meshtastic
 
-Was macht dieses Projekt eigentlich?
+![Platform](https://img.shields.io/badge/platform-ESP32--S3-10537E?style=flat-square)
+![Framework](https://img.shields.io/badge/framework-Arduino%20%2F%20PlatformIO-04A098?style=flat-square)
+![Node](https://img.shields.io/badge/mesh-Meshtastic-62B22E?style=flat-square)
+![Status](https://img.shields.io/badge/status-prototype%20%E2%80%94%20kayna--funkt-lightgrey?style=flat-square)
 
-Zwei kleine Microcontroller-Boards werden über eine Kabelverbindung (UART/seriell) miteinander verbunden:
+Ein Seeed XIAO ESP32-S3 verbindet sich per UART mit einer Meshtastic-Node (Seeed XIAO nRF52) und dient als Prototyp für die Versendung und Speicherung von **Leitstellen-Lagemeldungen** — Teil des Notmeldestellen-Projekts **kayna-funkt**.
 
-Seeed XIAO ESP32-S3 — läuft der eigentliche Code, den du in diesem Repo findest. Er "spricht" mit der zweiten Platine und gibt ihr den Befehl "sende jetzt eine Nachricht".
-Seeed XIAO nRF52 (Meshtastic-Node) — läuft die fertige Meshtastic-Firmware und übernimmt das eigentliche Funken (LoRa) ins Mesh-Netzwerk.
+</div>
 
-Der ESP32-S3 selbst hat kein LoRa-Funkmodul — er nutzt die Meshtastic-Node quasi als "Funk-Anhängsel", mit dem er über eine einfache Kabelverbindung spricht.
+---
 
-Was du brauchst (Hardware)
-Teil	Wofür
-Seeed XIAO ESP32-S3	Führt den Code aus diesem Repo aus
-Seeed XIAO nRF52 (mit Meshtastic-Firmware)	Übernimmt das Funken ins Mesh
-Breadboard	Zum Verbinden beider Boards
-2× USB-C-Kabel (Datenkabel, keine reinen Ladekabel!)	Strom + Programmieren
-Jumper-Kabel	Für die Verkabelung
-Verkabelung
+## 📋 Inhalt
 
-Die beiden Boards werden über UART (seriell) gekreuzt verbunden:
+- [Was macht dieses Projekt?](#-was-macht-dieses-projekt)
+- [Hardware](#-hardware)
+- [Verkabelung](#-verkabelung)
+- [Software-Setup](#-software-setup)
+- [Meshtastic-Node per CLI vorbereiten](#-meshtastic-node-per-cli-vorbereiten)
+- [Wie der Code funktioniert](#-wie-der-code-funktioniert)
+- [🚨 Lagemeldungen (kayna-funkt)](#-lagemeldungen-kayna-funkt)
+- [Testen](#-testen-ob-alles-funktioniert)
+- [Troubleshooting](#-troubleshooting)
+- [Weiterführende Links](#-weiterführende-links)
+- [Changelog](#-changelog)
+- [Lizenz](#-lizenz)
 
-XIAO ESP32-S3	Meshtastic-Node (XIAO nRF52)
-D6 (TX, GPIO43)	→ RX der Node
-D7 (RX, GPIO44)	← TX der Node
-GND	↔ GND (gemeinsame Masse — Pflicht!)
+---
 
-Wichtig: TX und RX müssen gekreuzt werden (TX → RX, RX → TX), nicht 1:1 verbunden. Beide GND-Pins müssen über eine gemeinsame Schiene auf dem Breadboard verbunden sein, auch wenn beide Boards separat über USB mit Strom versorgt werden — sonst haben die beiden Boards kein gemeinsames Spannungs-Referenzniveau und die Kommunikation funktioniert nicht.
+## 🧭 Was macht dieses Projekt?
 
-Software-Setup
-1. Entwicklungsumgebung
-VS Codium (oder VS Code)
-PlatformIO-Erweiterung darin installieren
-2. Projekt öffnen
+Zwei kleine Microcontroller-Boards, seriell (UART) verbunden:
 
-Dieses Repo klonen oder herunterladen, dann in VS Codium über PlatformIO → Projects → Add Existing öffnen.
+| Board | Rolle |
+|---|---|
+| **Seeed XIAO ESP32-S3** | Führt den Code aus diesem Repo aus, speichert Lagemeldungen in einer lokalen Datenbank |
+| **Seeed XIAO nRF52** (Stock Meshtastic-Firmware) | Übernimmt das Funken (LoRa) ins Mesh-Netzwerk |
 
-Die Bibliothek Meshtastic-arduino wird automatisch über platformio.ini (lib_deps) beim ersten Build heruntergeladen — kein manueller Schritt nötig.
+Der ESP32-S3 hat **kein eigenes LoRa-Funkmodul** — er nutzt die Meshtastic-Node als "Funk-Anhängsel" und spricht mit ihr über eine serielle Verbindung.
 
-3. Firmware auf den ESP32-S3 flashen
-ESP32-S3 per USB-C anschließen
-In der PlatformIO-Seitenleiste (Ameisen-Symbol links) unter PROJECT TASKS → seeed_xiao_esp32s3 → General → Upload klicken
-Alternativ im Terminal: pio run --target upload
+**Ziel des Prototyps:** Eingehende, speziell markierte Nachrichten ("Lagemeldungen") sollen nicht nur als lose Chat-Nachricht im Mesh verpuffen, sondern strukturiert und mit Änderungshistorie auf dem Gerät gespeichert werden — als echtes Backup zur reinen Meshtastic-Nachrichtenliste.
 
-Häufige Stolpersteine dabei:
+---
 
-"Could not configure port" oder "serial noise": Meist, weil noch ein anderes Terminal/Monitor-Fenster den seriellen Port blockiert — alle anderen Terminals schließen und nochmal versuchen.
-Reines Ladekabel statt Datenkabel angeschlossen → anderes Kabel probieren.
-Rote LED am Board leuchtet dauerhaft beim Anstecken → normal, das ist die eingebaute Ladeanzeige, kein Fehler.
-4. Meshtastic-Node per CLI vorbereiten
+## 🔧 Hardware
 
-Die Node muss einmalig per USB direkt am Rechner konfiguriert werden (die spätere D6/D7-Verbindung reicht dafür nicht aus).
+| Teil | Wofür | Mehr Infos |
+|---|---|---|
+| Seeed XIAO ESP32-S3 | Führt den Code aus | [Seeed Wiki: Getting Started](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/) · [Pin-Belegung](https://wiki.seeedstudio.com/xiao_esp32s3_pin_multiplexing/) |
+| Seeed XIAO nRF52 + Meshtastic-Firmware | Funkt ins Mesh-Netzwerk | [Meshtastic-Firmware flashen](https://flasher.meshtastic.org/) |
+| Breadboard | Verbindung beider Boards | – |
+| 2× USB-C-Kabel (Datenkabel!) | Strom + Programmieren | – |
+| Jumper-Kabel | Für die Verkabelung | – |
 
-Meshtastic-CLI installieren:
+> ⚠️ **Achtung bei den USB-Kabeln:** Manche USB-C-Kabel sind reine Ladekabel ohne Datenleitungen. Häufigste Ursache für Upload-Fehler.
 
+---
+
+## 🔌 Verkabelung
+
+TX/RX **gekreuzt**, GND gemeinsam:
+
+| XIAO ESP32-S3 | Meshtastic-Node |
+|---|---|
+| D6 (TX, GPIO43) | → RX |
+| D7 (RX, GPIO44) | ← TX |
+| GND | ↔ GND (Pflicht, auch bei getrennter USB-Stromversorgung) |
+
+---
+
+## 💻 Software-Setup
+
+### 1. Entwicklungsumgebung
+
+- [VS Codium](https://vscodium.com/) + [PlatformIO-Erweiterung](https://platformio.org/install/ide?install=vscode)
+
+### 2. platformio.ini
+
+```ini
+[env:seeed_xiao_esp32s3]
+platform = espressif32
+board = seeed_xiao_esp32s3
+framework = arduino
+monitor_speed = 115200
+lib_deps =
+    https://github.com/meshtastic/Meshtastic-arduino.git
+    siara-cc/Sqlite3Esp32
+```
+
+### 3. Firmware flashen
+
+```bash
+pio run --target upload
+```
+
+---
+
+## 📡 Meshtastic-Node per CLI vorbereiten
+
+Einmalig **per USB direkt am Rechner** (nicht über D6/D7):
+
+```bash
 pip3 install --upgrade meshtastic
 
-Node per USB anschließen, dann:
+meshtastic --set lora.region EU_868
+meshtastic --set lora.tx_enabled true
 
-meshtastic --port /dev/cu.xxxxx --info
+meshtastic --set serial.enabled true
+meshtastic --set serial.mode PROTO
+meshtastic --set serial.rxd 7
+meshtastic --set serial.txd 6
+meshtastic --set serial.baud BAUD_115200
 
-(Portname mit meshtastic --info ohne --port herausfinden, falls nur ein Gerät angeschlossen ist)
+meshtastic --reboot
+```
 
-Region setzen (Pflicht — ohne das sendet die Node gar nicht):
+📖 Details: [meshtastic.org/docs/software/python/cli](https://meshtastic.org/docs/software/python/cli/)
 
-meshtastic --port /dev/cu.xxxxx --set lora.region EU_868
+---
 
-Serielle Schnittstelle für die Verbindung zum ESP32-S3 aktivieren:
+## 🧩 Wie der Code funktioniert
 
-meshtastic --port /dev/cu.xxxxx --set serial.enabled true
-meshtastic --port /dev/cu.xxxxx --set serial.mode PROTO
-meshtastic --port /dev/cu.xxxxx --set serial.rxd 7
-meshtastic --port /dev/cu.xxxxx --set serial.txd 6
-meshtastic --port /dev/cu.xxxxx --set serial.baud BAUD_115200
+| Funktion | Aufgabe |
+|---|---|
+| `mt_serial_init(...)` | Baut beim Start die Verbindung zur Node auf |
+| `mt_loop(millis())` | Muss **jeden Durchlauf** aufgerufen werden — hält Verbindung + eingehende Nachrichten am Laufen |
+| `mt_send_text(...)` | Sendet alle 5 Minuten eine Test-Nachricht als Broadcast |
+| `set_text_message_callback(...)` | Registriert `onTextMessage()`, wird bei jeder eingehenden Textnachricht aufgerufen |
 
-Danach USB-Kabel von der Node abziehen und stattdessen auf die D6/D7-Verkabelung zum ESP32-S3 umstecken.
+**LED-Status** (eingebaute LED, GPIO21):
 
-Wie der Code funktioniert
+| Muster | Bedeutung |
+|---|---|
+| Doppel-Blitz + Pause | Verbindungsaufbau (Handshake) läuft |
+| 5× schnelles Blinken (einmalig) | Verbindung erfolgreich hergestellt |
+| Langsames Blinken (500ms) | Normalbetrieb |
+| 6× schnelles Blinken | Test-Nachricht wird gesendet |
+| 3× schnelles Blinken | Lagemeldung wurde gespeichert/aktualisiert |
 
-Die komplette Logik steckt in src/main.cpp:
+---
 
-mt_serial_init(...) baut beim Start die Verbindung zur Meshtastic-Node auf.
-mt_loop(millis()) muss in jedem Durchlauf der loop()-Funktion aufgerufen werden — das hält die Kommunikation mit der Node am Laufen.
-Alle 20 Sekunden wird mt_send_text(...) aufgerufen und schickt eine Textnachricht als Broadcast ins Mesh.
-Die eingebaute LED (GPIO21) zeigt zwei Zustände:
-Langsames Blinken (alle 500ms) im Ruhezustand → "Programm läuft"
-Schnelles Blinken (6× kurz) beim Senden einer Nachricht → "Nachricht geht gerade raus"
-Testen, ob's funktioniert
-Seriellen Monitor öffnen: PlatformIO-Seitenleiste → Monitor, oder pio run --target monitor
-Nach dem Start sollte >>> VERBUNDEN mit der Node erscheinen
-Alle 20 Sekunden: >>> Nachricht gesendet, Erfolg: JA
-Zur Kontrolle die Meshtastic-App oder den öffentlichen Kanal eines zweiten Geräts im Mesh beobachten
-Troubleshooting-Schnellübersicht
-Problem	Wahrscheinlichste Ursache
-Upload schlägt fehl ("serial noise", Timeout)	Anderes Terminal/Monitor blockiert den Port, oder Ladekabel statt Datenkabel
->>> VERBUNDEN erscheint nie	Verkabelung prüfen (TX/RX gekreuzt? GND verbunden?), Baudrate auf beiden Seiten identisch?
-Verbindung da, aber keine Nachricht im Mesh	Region der Node gesetzt? txEnabled: true? Richtiger Kanal beobachtet?
-Rote LED leuchtet permanent	Normal — eingebaute Ladeanzeige, kein Fehler
-IntelliSense zeigt rote Fehler im Editor, Build läuft aber durch	Bekannter clang/Xtensa-Konflikt in der Editor-Vorschau, kein echter Fehler
-Lizenz
+## 🚨 Lagemeldungen (kayna-funkt)
 
-Siehe LICENSE.
+Eingehende Nachrichten mit dem Prefix `LAGE:` werden erkannt, geparst und in einer lokalen **SQLite-Datenbank** (`/spiffs/lage.db`) gespeichert — alle anderen Mesh-Nachrichten werden ignoriert.
+
+### Nachrichtenformat
+
+```
+LAGE:<ID|NEU>;<Kategorie>;<Status>;<Text>
+```
+
+**Neue Lagemeldung anlegen:**
+```
+LAGE:NEU;Brand;offen;Kellerbrand Mehrfamilienhaus Hauptstraße 12
+```
+
+**Bestehende Lagemeldung aktualisieren** (ID aus vorheriger Anlage, z.B. `1`):
+```
+LAGE:1;Brand;in Bearbeitung;Feuerwehr löscht, Nachbargebäude evakuiert
+```
+
+Trennzeichen ist bewusst **Semikolon** (`;`) statt Pipe — auf jeder Tastatur ohne Umschalt-Kombination erreichbar, wichtig im Feldeinsatz.
+
+### Datenmodell
+
+| Tabelle | Zweck |
+|---|---|
+| `lagemeldungen` | Aktueller Stand jeder Lagemeldung (Kategorie, Status, Text, Absender, Zeitstempel) |
+| `lage_historie` | Jede Änderung wird **vor** dem Überschreiben protokolliert (alter/neuer Text, alter/neuer Status, Zeitpunkt) — volle Nachvollziehbarkeit |
+
+IDs laufen über SQLites eingebaute `rowid`, keine expliziten `PRIMARY KEY`/`UNIQUE`-Constraints (siehe [Troubleshooting](#-troubleshooting) — Grund dafür ist ein bekannter Bibliotheks-Bug).
+
+### Serial-CLI zum Prüfen
+
+Im seriellen Monitor eintippen:
+
+| Befehl | Zeigt |
+|---|---|
+| `liste` | Alle aktuellen Lagemeldungen |
+| `liste kategorie <X>` | Gefiltert nach Kategorie |
+| `liste status <X>` | Gefiltert nach Status |
+| `detail <ID>` | Eine Lagemeldung inkl. kompletter Änderungshistorie |
+| `help` | Befehlsübersicht |
+
+> 📌 **Aktueller Stand:** Anzeige nur über den seriellen Monitor (CLI). Ein grafisches Interface (HTML, mit zentraler Datenbank-Anbindung und Anzeige auf verschiedenen Displays, u.a. ePaper) ist für eine spätere Ausbaustufe geplant — die Datenbank auf dem ESP32 dient dann primär als lokaler Offline-Puffer/Backup.
+>
+> ⏱️ **Bekannte Einschränkung:** Zeitstempel basieren aktuell auf `millis()` (Geräte-Uptime seit letztem Reboot), keine echte Wanduhrzeit. NTP-Sync via WLAN ist vorbereitet, aber noch nicht eingebaut.
+
+---
+
+## ✅ Testen, ob alles funktioniert
+
+1. Seriellen Monitor öffnen: `pio run --target monitor`
+2. `>>> VERBUNDEN mit der Node` sollte erscheinen
+3. Von einem zweiten Gerät im Mesh eine Lagemeldung senden (siehe oben)
+4. Im Monitor sollte erscheinen: `>>> Neue Lagemeldung angelegt, ID X`
+5. `liste` eintippen → sollte die neue Meldung zeigen
+
+---
+
+## 🩺 Troubleshooting
+
+| Problem | Ursache | Fix |
+|---|---|---|
+| Upload schlägt fehl (`serial noise`, Timeout) | Anderes Terminal/Monitor blockiert den Port | Alle anderen Terminals schließen |
+| Rote LED leuchtet dauerhaft bei USB | Normal — eingebaute Charge-LED | Kein Fehler |
+| `SQL-Fehler: disk I/O error` beim Start | **Bekannter Bug** der `Sqlite3Esp32`-Bibliothek: `PRIMARY KEY`/`UNIQUE`-Constraints lösen auf SPIFFS zuverlässig I/O-Fehler aus ([Issue #18](https://github.com/siara-cc/esp32_arduino_sqlite3_lib/issues/18)) | Behoben: Schema nutzt keine expliziten Constraints mehr, IDs laufen über SQLites eingebaute `rowid` |
+| Monitor zeigt nichts/Datenmüll | `monitor_speed` in `platformio.ini` passt nicht zu `Serial.begin()` im Code | `monitor_speed = 115200` setzen |
+| Node sendet laut CLI erfolgreich, App zeigt nichts | App noch per USB verbunden (Port-Konflikt) oder Bluetooth-Kopplung verloren | Node nur per Strom + D6/D7 betreiben, App per **Bluetooth** verbinden |
+
+---
+
+## 🔗 Weiterführende Links
+
+- [Seeed XIAO ESP32-S3 – Getting Started](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/)
+- [Meshtastic – Offizielle Dokumentation](https://meshtastic.org/docs/)
+- [Meshtastic – Serial Module Konfiguration](https://meshtastic.org/docs/configuration/module/serial/)
+- [Meshtastic-Arduino Library (GitHub)](https://github.com/meshtastic/Meshtastic-arduino)
+- [Sqlite3Esp32 Library (GitHub)](https://github.com/siara-cc/esp32_arduino_sqlite3_lib)
+- [PlatformIO Dokumentation](https://docs.platformio.org/)
+
+---
+
+## 📝 Changelog
+
+### 2026-09-15
+
+- Grundgerüst: ESP32-S3 ↔ Meshtastic-Node über D6/D7 (UART, gekreuzt), Verbindungsaufbau mit vollständigem Handshake-Wait
+- LED-Statusanzeige (Warte-/Erfolgs-/Sende-/Heartbeat-Muster) über die eingebaute LED
+- Test-Sendung im festen Intervall (zuletzt: alle 5 Minuten)
+- Meshtastic-Node per CLI vollständig eingerichtet (Region, Serial-Modul, Owner, Kanal-Check)
+- **Lagemeldungen-Feature ergänzt:** eingehende `LAGE:`-Nachrichten werden geparst und gespeichert
+  - Nachrichtenformat zunächst mit Pipe (`|`), auf Anwenderwunsch auf Semikolon (`;`) umgestellt
+  - Speicherung zunächst als JSON-Datei (LittleFS + ArduinoJson) prototypisch umgesetzt
+  - Auf Wunsch durch echte relationale Datenbank ersetzt: SQLite (`Sqlite3Esp32`) mit zwei Tabellen (`lagemeldungen`, `lage_historie`) für Filterung, Kategorien und vollständige Änderungshistorie
+  - Serial-CLI-Befehle (`liste`, `liste kategorie`, `liste status`, `detail`) zum Prüfen ohne zusätzliches Interface
+  - Bug behoben: `disk I/O error` durch `PRIMARY KEY`/`UNIQUE`-Constraints auf SPIFFS (bekannter Library-Bug) — Schema auf implizite `rowid` umgestellt
+- Wissensdatenbank-Artikel in Odoo Knowledge angelegt und laufend um Node-Vorbereitung (CLI-Checks, Einstellungen, Firmware-Update-Weg für XIAO nRF52840) erweitert
+
+---
+
+## 📄 Lizenz
+
+Siehe [LICENSE](./LICENSE).
