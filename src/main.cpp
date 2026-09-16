@@ -37,6 +37,22 @@ const char* zustandName(SaeulenZustand z) {
   return "UNBEKANNT";
 }
 
+// --- Kurz-Codes für Zustandswechsel per Mesh-Nachricht ---
+// Bewusst kurz und eindeutig gehalten (kein Alltagswort), um auch unter Stress
+// oder auf kleiner Tastatur tippbar und nicht versehentlich auslösbar zu sein.
+struct ZustandsBefehl {
+  const char* code;
+  SaeulenZustand zustand;
+};
+
+const ZustandsBefehl ZUSTANDS_BEFEHLE[] = {
+  {"LGE",  SaeulenZustand::AKTIV},        // Lageoeffnung
+  {"NOR",  SaeulenZustand::STANDBY},      // Normalbetrieb
+  {"WTG",  SaeulenZustand::WARTUNG},      // Wartung
+  {"SAB",  SaeulenZustand::SABOTAGE},     // Sabotage (Test-Trigger)
+  {"SAUS", SaeulenZustand::STROMAUSFALL}, // Stromausfall (Test-Trigger, spaeter automatisch)
+};
+
 void ledOn()  { digitalWrite(LED_PIN, LOW); }
 void ledOff() { digitalWrite(LED_PIN, HIGH); }
 
@@ -59,6 +75,17 @@ void blinkWaiting() {
 // --- Callback: wird von mt_loop() aufgerufen, wenn eine Textnachricht ankommt ---
 void onTextMessage(uint32_t from, uint32_t to, uint8_t channel, const char* text) {
   String msg(text);
+
+  for (const ZustandsBefehl& befehl : ZUSTANDS_BEFEHLE) {
+    if (msg.equalsIgnoreCase(befehl.code)) {
+      Serial.print("!!! Befehl '"); Serial.print(befehl.code);
+      Serial.print("' empfangen, Zustand wechselt von "); Serial.print(zustandName(aktuellerZustand));
+      Serial.print(" auf "); Serial.println(zustandName(befehl.zustand));
+      aktuellerZustand = befehl.zustand;
+      return;
+    }
+  }
+
   if (!msg.startsWith("LAGE:")) return; // alles andere ignorieren
 
   String payload = msg.substring(5);

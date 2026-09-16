@@ -22,6 +22,7 @@ Ein Seeed XIAO ESP32-S3 verbindet sich per UART mit einer Meshtastic-Node (Seeed
 - [Software-Setup](#-software-setup)
 - [Meshtastic-Node per CLI vorbereiten](#-meshtastic-node-per-cli-vorbereiten)
 - [Wie der Code funktioniert](#-wie-der-code-funktioniert)
+- [🚦 Zustandsmodell der Säule](#-zustandsmodell-der-säule)
 - [🚨 Lagemeldungen (kayna-funkt)](#-lagemeldungen-kayna-funkt)
 - [Testen](#-testen-ob-alles-funktioniert)
 - [Troubleshooting](#-troubleshooting)
@@ -143,6 +144,28 @@ meshtastic --reboot
 
 ---
 
+## 🚦 Zustandsmodell der Säule
+
+Die Säule kennt fünf Betriebszustände. Umschalten per Kurz-Code als Mesh-Broadcast (Textnachricht):
+
+| Code | Zustand | Bedeutung |
+|---|---|---|
+| `LGE` | `AKTIV` | Lageöffnung — Notfallbetrieb |
+| `NOR` | `STANDBY` | Normalbetrieb (Startzustand nach Boot) |
+| `WTG` | `WARTUNG` | Wartungsmodus |
+| `SAB` | `SABOTAGE` | Sabotage erkannt (aktuell manueller Test-Trigger) |
+| `SAUS` | `STROMAUSFALL` | Stromausfall-Betrieb (aktuell manueller Test-Trigger, spätere Ausbaustufe: automatische Erkennung) |
+
+Codes bewusst kurz und eindeutig gehalten — keine Alltagswörter wie "aus", um versehentliches Auslösen und Tippfehler zu vermeiden, und schnell tippbar auch unter Stress oder auf kleiner Tastatur.
+
+Aktuellen Zustand abfragen: Serial-Befehl `status`.
+
+> 📌 **Aktueller Stand:** Nur der reine Zustandswechsel ist implementiert, noch ohne Prüfung, ob der Absender berechtigt ist (siehe Troubleshooting/Security-Hinweis unten). Automatische Erkennung von Stromausfall/Sabotage über Hardware sowie die Leitstellen-Anbindung folgen in späteren Schritten.
+
+> 🔐 **Sicherheitshinweis:** Aktuell kann jede Node im selben Mesh-Kanal per Kurz-Code den Zustand der Säule ändern — es gibt noch keine Absender-Prüfung. Für den Feldtest tragbar, vor einem echten Einsatz muss das über eine Absender-Allowlist abgesichert werden (siehe [Issue #1](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/1) im Hauptrepo).
+
+---
+
 ## 🚨 Lagemeldungen (kayna-funkt)
 
 Eingehende Nachrichten mit dem Prefix `LAGE:` werden erkannt, geparst und in einer lokalen **SQLite-Datenbank** (`/spiffs/lage.db`) gespeichert — alle anderen Mesh-Nachrichten werden ignoriert.
@@ -184,6 +207,7 @@ Im seriellen Monitor eintippen:
 | `liste kategorie <X>` | Gefiltert nach Kategorie |
 | `liste status <X>` | Gefiltert nach Status |
 | `detail <ID>` | Eine Lagemeldung inkl. kompletter Änderungshistorie |
+| `status` | Aktueller Zustand der Säule (siehe [Zustandsmodell](#-zustandsmodell-der-säule)) |
 | `help` | Befehlsübersicht |
 
 > 📌 **Aktueller Stand:** Anzeige nur über den seriellen Monitor (CLI). Ein grafisches Interface (HTML, mit zentraler Datenbank-Anbindung und Anzeige auf verschiedenen Displays, u.a. ePaper) ist für eine spätere Ausbaustufe geplant — die Datenbank auf dem ESP32 dient dann primär als lokaler Offline-Puffer/Backup.
@@ -226,6 +250,13 @@ Im seriellen Monitor eintippen:
 ---
 
 ## 📝 Changelog
+
+### 2026-09-16
+
+- **Zustandsmodell der Säule ergänzt** (STANDBY/AKTIV/STROMAUSFALL/WARTUNG/SABOTAGE), abfragbar per neuem Serial-Befehl `status`
+- Zustandswechsel per Kurz-Code als Mesh-Broadcast (`LGE`, `NOR`, `WTG`, `SAB`, `SAUS`) — bewusst kurz und ohne Alltagswörter, um Tippfehler/versehentliches Auslösen zu vermeiden
+- Feature-Roadmap strukturiert: Aufteilung in drei Repos (Mesh-Brain hier, [notfallbox-update-station](https://github.com/Pixeldieb/notfallbox-update-station) für Captive Portal/OTA, privates `notmeldestelle-leitstelle-spec` für die Leitstellen-Schnittstelle), Milestones „MVP Feldtest Kayna/Zeitz" und „Post-Pilot"
+- `upload_speed` in `platformio.ini` auf 115200 gesenkt (460800 war beim Flashen über USB unzuverlässig)
 
 ### 2026-09-15
 
