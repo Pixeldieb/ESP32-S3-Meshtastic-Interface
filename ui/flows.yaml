@@ -1,0 +1,237 @@
+# ============================================================
+# UI FLOWS
+# ============================================================
+
+flows:
+
+  # ----------------------------------------------------------
+  # FIRE
+  # ----------------------------------------------------------
+
+  - id: report_fire
+    name: "Brand melden"
+
+    steps:
+      - page: main_menu
+        action: click
+        target: fire_department
+
+      - page: fire_department_menu
+        action: click
+        target: fire
+
+      - page: emergency_confirmation
+        action: click
+        target: confirm
+
+      - page: emergency_transmission
+        action: execute
+        target: meshtastic.send_emergency
+
+      - page: emergency_details
+        condition: transmission.success == true
+        description: "Emergency details are displayed for manual recording."
+
+
+  # ----------------------------------------------------------
+  # CHEMICAL INCIDENT
+  # ----------------------------------------------------------
+
+  - id: report_chemical
+    name: "Chemischen Notfall melden"
+
+    steps:
+      - page: main_menu
+        action: click
+        target: fire_department
+
+      - page: fire_department_menu
+        action: click
+        target: chemical
+
+      - page: emergency_confirmation
+        action: click
+        target: confirm
+
+      - page: emergency_transmission
+        action: execute
+        target: meshtastic.send_emergency
+
+
+  # ----------------------------------------------------------
+  # TRAFFIC ACCIDENT
+  # ----------------------------------------------------------
+
+  - id: report_traffic_accident
+    name: "Verkehrsunfall melden"
+
+    steps:
+      - page: main_menu
+        action: click
+        target: fire_department
+
+      - page: fire_department_menu
+        action: click
+        target: traffic_accident
+
+      - page: emergency_confirmation
+        action: click
+        target: confirm
+
+      - page: emergency_transmission
+        action: execute
+        target: meshtastic.send_emergency
+
+
+  # ----------------------------------------------------------
+  # POLICE
+  # ----------------------------------------------------------
+
+  - id: report_burglary
+    name: "Einbruch melden"
+
+    steps:
+      - page: main_menu
+        action: click
+        target: police
+
+      - page: police_menu
+        action: click
+        target: burglary
+
+      - page: emergency_confirmation
+        action: click
+        target: confirm
+
+      - page: emergency_transmission
+        action: execute
+        target: meshtastic.send_emergency
+
+
+  - id: report_theft
+    name: "Diebstahl melden"
+
+    steps:
+      - page: main_menu
+        action: click
+        target: police
+
+      - page: police_menu
+        action: click
+        target: theft
+
+      - page: emergency_confirmation
+        action: click
+        target: confirm
+
+      - page: emergency_transmission
+        action: execute
+        target: meshtastic.send_emergency
+
+
+  # ----------------------------------------------------------
+  # AMBULANCE
+  # ----------------------------------------------------------
+
+  - id: report_injury
+    name: "Verletzung melden"
+
+    steps:
+      - page: main_menu
+        action: click
+        target: ambulance
+
+      - page: ambulance_menu
+        action: click
+        target: injury
+
+      - page: emergency_confirmation
+        action: click
+        target: confirm
+
+      - page: emergency_transmission
+        action: execute
+        target: meshtastic.send_emergency
+
+
+  - id: request_emergency_doctor
+    name: "Notarzt anfordern"
+
+    steps:
+      - page: main_menu
+        action: click
+        target: ambulance
+
+      - page: ambulance_menu
+        action: click
+        target: emergency_doctor
+
+      - page: emergency_confirmation
+        action: click
+        target: confirm
+
+      - page: emergency_transmission
+        action: execute
+        target: meshtastic.send_emergency
+
+
+  # ----------------------------------------------------------
+  # INFORMATION
+  # ----------------------------------------------------------
+
+  - id: view_situation_information
+    name: "Lageinformationen anzeigen"
+
+    steps:
+      - page: main_menu
+        action: click
+        target: information
+
+      - page: information_menu
+        action: click
+        target: request_situation_information
+
+      - page: situation_information
+        action: view
+        target: information_list
+
+      - page: situation_information
+        action: scroll
+        target: scroll_up
+
+      - page: situation_information
+        action: scroll
+        target: scroll_down
+
+      - page: situation_information
+        action: click
+        target: back
+
+
+  - id: view_crisis_staff_information
+    name: "Systeminformationen Krisenstab anzeigen"
+
+    steps:
+      - page: main_menu
+        action: click
+        target: information
+
+      - page: information_menu
+        action: click
+        target: crisis_staff_information
+
+      - page: crisis_staff_information
+        action: view
+        target: information_list
+
+      - page: crisis_staff_information
+        action: scroll
+        target: scroll_up
+
+      - page: crisis_staff_information
+        action: scroll
+        target: scroll_down
+
+      - page: crisis_staff_information
+        action: click
+        target: back

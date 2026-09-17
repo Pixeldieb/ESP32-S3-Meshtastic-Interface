@@ -1,0 +1,540 @@
+# ============================================================
+# UI Specification
+# ============================================================
+#
+# Source of truth for the ESP32 emergency terminal UI.
+#
+# This file describes:
+# - pages
+# - navigation
+# - interactive elements
+# - actions
+# - system states
+#
+# IDs are stable identifiers and should not be changed without
+# updating references in the firmware.
+# ============================================================
+
+app:
+  id: emergency_terminal
+  name: "Emergency Terminal"
+  description: "ESP32-based emergency and information terminal"
+  version: "1.0"
+
+  operating_states:
+    normal:
+      description: "Normal operation with external power available."
+      main_menu_enabled: false
+
+    power_failure:
+      description: "Operation during power failure."
+      main_menu_enabled: true
+      main_menu_indicator:
+        type: pulse
+        target: signal_led
+        description: "Signal LED lightly pulses to indicate availability."
+
+navigation:
+  initial_page: main_menu
+
+  pages:
+
+    # ==========================================================
+    # MAIN MENU
+    # ==========================================================
+
+    - id: main_menu
+      title: "Hauptmenü"
+      description: >
+        Main emergency selection menu. Only available when
+        external power has failed.
+
+      availability:
+        condition: system.power_failure == true
+
+      indicator:
+        type: pulse
+        target: signal_led
+        description: "Light pulse indicating that the terminal is active."
+
+      elements:
+
+        - id: fire_department
+          type: menu_item
+          label: "Feuerwehr"
+          action:
+            type: navigate
+            target: fire_department_menu
+
+        - id: police
+          type: menu_item
+          label: "Polizei"
+          action:
+            type: navigate
+            target: police_menu
+
+        - id: ambulance
+          type: menu_item
+          label: "Krankenwagen"
+          action:
+            type: navigate
+            target: ambulance_menu
+
+        - id: information
+          type: menu_item
+          label: "Info"
+          action:
+            type: navigate
+            target: information_menu
+
+
+    # ==========================================================
+    # FIRE DEPARTMENT
+    # ==========================================================
+
+    - id: fire_department_menu
+      title: "Feuerwehr"
+      parent: main_menu
+
+      elements:
+
+        - id: fire
+          type: menu_item
+          label: "Brand"
+          action:
+            type: navigate
+            target: emergency_confirmation
+          parameters:
+            emergency_type: fire
+            emergency_category: fire_department
+            emergency_label: "Brand"
+
+        - id: chemical
+          type: menu_item
+          label: "Chemie"
+          action:
+            type: navigate
+            target: emergency_confirmation
+          parameters:
+            emergency_type: chemical
+            emergency_category: fire_department
+            emergency_label: "Chemie"
+
+        - id: traffic_accident
+          type: menu_item
+          label: "Verkehrsunfall"
+          action:
+            type: navigate
+            target: emergency_confirmation
+          parameters:
+            emergency_type: traffic_accident
+            emergency_category: fire_department
+            emergency_label: "Verkehrsunfall"
+
+        - id: fire_other
+          type: menu_item
+          label: "Andere"
+          action:
+            type: navigate
+            target: emergency_confirmation
+          parameters:
+            emergency_type: other
+            emergency_category: fire_department
+            emergency_label: "Andere"
+
+        - id: back
+          type: button
+          label: "Zurück"
+          action:
+            type: back
+
+
+    # ==========================================================
+    # POLICE
+    # ==========================================================
+
+    - id: police_menu
+      title: "Polizei"
+      parent: main_menu
+
+      elements:
+
+        - id: burglary
+          type: menu_item
+          label: "Einbruch"
+          action:
+            type: navigate
+            target: emergency_confirmation
+          parameters:
+            emergency_type: burglary
+            emergency_category: police
+            emergency_label: "Einbruch"
+
+        - id: theft
+          type: menu_item
+          label: "Diebstahl"
+          action:
+            type: navigate
+            target: emergency_confirmation
+          parameters:
+            emergency_type: theft
+            emergency_category: police
+            emergency_label: "Diebstahl"
+
+        - id: security
+          type: menu_item
+          label: "Sicherheit"
+          action:
+            type: navigate
+            target: emergency_confirmation
+          parameters:
+            emergency_type: security
+            emergency_category: police
+            emergency_label: "Sicherheit"
+
+        - id: police_other
+          type: menu_item
+          label: "Andere"
+          action:
+            type: navigate
+            target: emergency_confirmation
+          parameters:
+            emergency_type: other
+            emergency_category: police
+            emergency_label: "Andere"
+
+        - id: back
+          type: button
+          label: "Zurück"
+          action:
+            type: back
+
+
+    # ==========================================================
+    # AMBULANCE
+    # ==========================================================
+
+    - id: ambulance_menu
+      title: "Krankenwagen"
+      parent: main_menu
+
+      elements:
+
+        - id: injury
+          type: menu_item
+          label: "Verletzung"
+          action:
+            type: navigate
+            target: emergency_confirmation
+          parameters:
+            emergency_type: injury
+            emergency_category: ambulance
+            emergency_label: "Verletzung"
+
+        - id: emergency_doctor
+          type: menu_item
+          label: "Notarzt"
+          action:
+            type: navigate
+            target: emergency_confirmation
+          parameters:
+            emergency_type: emergency_doctor
+            emergency_category: ambulance
+            emergency_label: "Notarzt"
+
+        - id: transport
+          type: menu_item
+          label: "Transport"
+          action:
+            type: navigate
+            target: emergency_confirmation
+          parameters:
+            emergency_type: transport
+            emergency_category: ambulance
+            emergency_label: "Transport"
+
+        - id: ambulance_other
+          type: menu_item
+          label: "Andere"
+          action:
+            type: navigate
+            target: emergency_confirmation
+          parameters:
+            emergency_type: other
+            emergency_category: ambulance
+            emergency_label: "Andere"
+
+        - id: back
+          type: button
+          label: "Zurück"
+          action:
+            type: back
+
+
+    # ==========================================================
+    # INFORMATION
+    # ==========================================================
+
+    - id: information_menu
+      title: "Info"
+      parent: main_menu
+
+      elements:
+
+        - id: request_situation_information
+          type: menu_item
+          label: "Lageinformationen anfordern"
+          action:
+            type: navigate
+            target: situation_information
+
+        - id: crisis_staff_information
+          type: menu_item
+          label: "Systeminformationen Krisenstab"
+          action:
+            type: navigate
+            target: crisis_staff_information
+
+        - id: back
+          type: button
+          label: "Zurück"
+          action:
+            type: back
+
+
+    # ==========================================================
+    # EMERGENCY CONFIRMATION
+    # ==========================================================
+
+    - id: emergency_confirmation
+      title: "Notfall bestätigen"
+      description: >
+        Confirmation screen shown before an emergency message
+        is transmitted.
+
+      parameters:
+        - emergency_category
+        - emergency_type
+        - emergency_label
+
+      elements:
+
+        - id: cancel
+          type: button
+          label: "Abbruch"
+          action:
+            type: back
+
+        - id: confirm
+          type: button
+          label: "Bestätigung"
+          action:
+            type: execute
+            command: trigger_emergency
+            parameters:
+              emergency_category: "{emergency_category}"
+              emergency_type: "{emergency_type}"
+              emergency_label: "{emergency_label}"
+
+
+    # ==========================================================
+    # EMERGENCY TRANSMISSION
+    # ==========================================================
+
+    - id: emergency_transmission
+      title: "Notfall wird übermittelt"
+      description: >
+        Displays the transmission status while the emergency
+        message is sent via Meshtastic.
+
+      state:
+        transmission:
+          values:
+            - pending
+            - success
+            - failed
+
+      indicators:
+
+        - id: warning_led
+          type: led
+          description: "Warning LED is activated during emergency handling."
+
+        - id: meshtastic_status
+          type: status
+          description: "Displays Meshtastic transmission status."
+
+      actions:
+
+        on_start:
+          - execute: warning_led.on
+          - execute: meshtastic.send_emergency
+
+        on_success:
+          - navigate: emergency_details
+
+        on_failure:
+          - navigate: emergency_transmission_failed
+
+
+    # ==========================================================
+    # EMERGENCY DETAILS
+    # ==========================================================
+
+    - id: emergency_details
+      title: "Notfall übermittelt"
+      description: >
+        Displays the emergency details after successful
+        Meshtastic transmission. The information can be
+        manually noted by the user.
+
+      elements:
+
+        - id: emergency_details_display
+          type: value
+          label: "Notfalldetails"
+          data_source: emergency.last_transmission
+
+        - id: acknowledge
+          type: button
+          label: "Zurück"
+          action:
+            type: navigate
+            target: main_menu
+
+
+    # ==========================================================
+    # TRANSMISSION FAILED
+    # ==========================================================
+
+    - id: emergency_transmission_failed
+      title: "Übertragung fehlgeschlagen"
+      description: >
+        Display shown when the emergency message could not
+        be transmitted successfully.
+
+      elements:
+
+        - id: retry
+          type: button
+          label: "Erneut senden"
+          action:
+            type: execute
+            command: retry_emergency_transmission
+
+        - id: cancel
+          type: button
+          label: "Abbruch"
+          action:
+            type: navigate
+            target: main_menu
+
+
+    # ==========================================================
+    # SITUATION INFORMATION
+    # ==========================================================
+
+    - id: situation_information
+      title: "Lageinformationen"
+      description: >
+        Displays current situation information and the latest
+        received messages.
+
+      elements:
+
+        - id: information_list
+          type: list
+          label: "Letzte Meldungen"
+          data_source: situation_information.messages
+
+        - id: scroll_up
+          type: button
+          label: "Hoch"
+          action:
+            type: scroll
+            direction: up
+
+        - id: scroll_down
+          type: button
+          label: "Runter"
+          action:
+            type: scroll
+            direction: down
+
+        - id: back
+          type: button
+          label: "Zurück"
+          action:
+            type: back
+
+
+    # ==========================================================
+    # CRISIS STAFF INFORMATION
+    # ==========================================================
+
+    - id: crisis_staff_information
+      title: "Systeminformationen Krisenstab"
+      description: >
+        Displays situation information and latest messages
+        relevant to the crisis management team.
+
+      elements:
+
+        - id: information_list
+          type: list
+          label: "Letzte Meldungen"
+          data_source: crisis_staff_information.messages
+
+        - id: scroll_up
+          type: button
+          label: "Hoch"
+          action:
+            type: scroll
+            direction: up
+
+        - id: scroll_down
+          type: button
+          label: "Runter"
+          action:
+            type: scroll
+            direction: down
+
+        - id: back
+          type: button
+          label: "Zurück"
+          action:
+            type: back
+
+
+# ============================================================
+# GLOBAL ACTIONS
+# ============================================================
+
+actions:
+
+  trigger_emergency:
+    description: "Trigger an emergency message."
+    sequence:
+      - navigate: emergency_transmission
+      - execute: warning_led.on
+      - execute: meshtastic.send_emergency
+
+  retry_emergency_transmission:
+    description: "Retry the last emergency transmission."
+    sequence:
+      - execute: meshtastic.send_emergency
+
+
+# ============================================================
+# HARDWARE INDICATORS
+# ============================================================
+
+hardware:
+
+  leds:
+
+    - id: signal_led
+      purpose: "Indicates that the emergency terminal is available during power failure."
+
+    - id: warning_led
+      purpose: "Indicates that an emergency has been triggered."
