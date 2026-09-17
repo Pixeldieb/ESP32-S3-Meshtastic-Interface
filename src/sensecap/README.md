@@ -16,7 +16,7 @@ Build/Flash: `pio run -e sensecap_indicator -t upload`
 | Menü/Notfall-Flow (LVGL, `ui_model.cpp`) | ✅ läuft, inkl. Halte-Bestätigung, Sende-/Erfolg/Fehlschlag-Screens |
 | Lagemeldungen in SQLite (`lage_db`, wiederverwendet von der XIAO-Säule) | ✅ läuft |
 | Uhrzeit | ⚠️ nur Build-Zeitpunkt automatisch gesetzt, kein RTC/NTP — `settime YYYY-MM-DD HH:MM:SS` über Serial |
-| Meshtastic-Anbindung | ❌ noch nicht funktional — siehe [Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/36) |
+| Meshtastic-Anbindung | ⚠️ rohes LoRa (SX1262 direkt) sendet/läuft jetzt — aber noch **kein** Meshtastic-Protokoll (Verschlüsselung/Routing/Kanäle fehlen). Siehe [Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/36) |
 | Standby-Screen, Alarm-Blinken, Batterie/Solar/Netz-Symbol | ❌ noch nicht begonnen |
 | Lokaler Betreiber / Onboarding | ⚠️ nur Datenstruktur (`station_config.h`), noch keine Eingabe-UI |
 
@@ -79,10 +79,11 @@ vier Punkte oben der Reihe nach neu verifizieren.
   künftiges Onboarding (noch keine Eingabe-UI).
 - `wall_clock.h/.cpp` — echte Uhrzeit (kein RTC, wird beim Flashen aus der Build-Zeit
   gesetzt, sonst per `settime`).
-- `meshtastic_bridge.h/.cpp` — externe-Node-Anbindung (Weg 2), **noch nicht aktiv**
-  (kein freier GPIO gefunden, siehe unten).
-- `lora_radio.h/.cpp` — Onboard-SX1262 direkt (Weg 1), **experimentell, nicht
-  Meshtastic-kompatibel**, Chip antwortet noch nicht zuverlässig.
+- `meshtastic_bridge.h/.cpp` — externe-Node-Anbindung (Weg 2), **endgültig verworfen**
+  (kein freier GPIO, RP2040 hat keine Hardware-Verbindung zum SX1262 — siehe unten).
+- `lora_radio.h/.cpp` — Onboard-SX1262 direkt (Weg 1), **funktioniert** (SPI/Reset-Timing-
+  Fix, siehe unten), aber weiterhin **nicht Meshtastic-protokoll-kompatibel** — nur rohes
+  LoRa senden/empfangen.
 
 ---
 
@@ -99,23 +100,36 @@ RELEASED-Events, kein eigenes Touch-Polling mehr nötig).
 ## 5. Meshtastic-Anbindung — der offene Punkt
 
 Siehe **[Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/36)**
-für den vollen Stand. Kurzfassung:
+für den vollen Stand. Kurzfassung (Stand 2026-09-17, Update autonome Session):
 
-- **Weg 2 (externe Node über UART, wie die XIAO-Säule):** Kein sicherer freier GPIO
-  auf diesem ESP32-S3 mehr. GPIO22-25 sind laut `uart_set_pin` ungültig, GPIO26/27
-  hängen den Chip komplett auf (vermutlich SPI-Flash/PSRAM-Leitungen — **dort nicht
-  weiter testen**). Naheliegendster nächster Schritt: RP2040-Co-Prozessor als Relay
-  nutzen (der hat echte freie Pins), Bytes über die vorhandene interne ESP32↔RP2040-
-  UART durchreichen.
-- **Weg 1 (eingebautes SX1262 direkt, `lora_radio.cpp`):** Kein Absturz mehr (eigene
-  `RadioLibHal`, die NSS/RST/BUSY/DIO1 auf den IO-Expander umleitet), aber
-  `SX1262::begin()` liefert `RADIOLIB_ERR_CHIP_NOT_FOUND`. Wahrscheinliche Ursache:
-  BUSY-Abfrage läuft über I2C (langsam/undeterministisch), das SX126x-Protokoll
-  erwartet aber engelegte GPIO-Reads während der SPI-Transaktion.
-  **Wichtig:** Selbst wenn das SPI-Timing gelöst wird, ist das noch **kein**
-  Meshtastic — nur rohes LoRa. Echte Mesh-Kompatibilität (Verschlüsselung, Routing,
-  Kanäle) bräuchte zusätzlich entweder eine eigene Protokoll-Nachbildung oder eine
-  Integration der echten Meshtastic-Firmware.
+- **Weg 1 (eingebautes SX1262 direkt, `lora_radio.cpp`): CHIP_NOT_FOUND gelöst.**
+  Realer Schaltplan zum Board gefunden (öffentliches Referenzprojekt
+  [ril3y/sensecap-indicator-d1l](https://github.com/ril3y/sensecap-indicator-d1l),
+  `SENSECAP_INDICATOR_PINOUT_SCHEMATIC.md`) — bestätigt unsere IO-Expander-Pinbelegung
+  (NSS=IO0, RST=IO1, BUSY=IO2, DIO1=IO3) exakt. Ursache für `CHIP_NOT_FOUND` war nicht
+  die vermutete BUSY-über-I2C-Geschwindigkeit, sondern fehlende Settle-Zeit:
+  `SX126x::reset()` pulst RST und hämmert danach *ohne jede Wartezeit* sofort
+  `standby()` über SPI — auf echter Hardware antwortet der Chip da noch nicht
+  zuverlässig. Per `RADIOLIB_DEBUG_SPI` bestätigt: alle `GET_STATUS`-Antworten während
+  der 10x-Retry-Schleife kamen als `0x00 0x00` zurück (siehe `RADIOLIB_SX126X_REG_VERSION_STRING`-Dump).
+  Fix in `lora_radio_wake_chip()`: eigener Reset + 20ms Settle-Zeit + ein rohes
+  `GET_STATUS` als Lebenszeichen-Check, **bevor** RadioLib übernimmt. Danach: über
+  drei Power-Cycles reproduzierbar `SX1262::begin() -> 0 (OK)` und
+  `transmit() -> 0 (OK)`.
+- **Weg 2 (externe Node über UART) endgültig verworfen, nicht nur wegen GPIO-Mangel:**
+  Der Schaltplan zeigt außerdem, dass der RP2040-Co-Prozessor **keine** Hardware-Verbindung
+  zum SX1262 hat — er ist ein reiner Sensor-Co-Prozessor (AHT20/SGP40/SCD41/SD-Karte/Buzzer)
+  über ein fest verdrahtetes COBS-Binärprotokoll. Die früher angedachte "RP2040 als Relay"-
+  Ausweichoption ist damit hinfällig (unabhängig davon, dass Weg 1 jetzt sowieso funktioniert).
+- **Neuer, jetzt eigentlicher offener Punkt:** Rohes LoRa-Senden/Empfangen über den SX1262
+  funktioniert, ist aber **kein** Meshtastic — kein kompatibles Paketformat, keine
+  Verschlüsselung, kein Routing/Kanal-Handling. Echte Mesh-Kompatibilität bräuchte entweder
+  (a) eine Nachbildung des Meshtastic-Protokolls auf Basis dieser rohen Funkverbindung
+  (eigenständiger, nicht-trivialer Umfang), oder (b) eine bewusste Entscheidung, dass
+  kayna-funkt-Geräte vorerst nur *untereinander* über ein eigenes, einfacheres Protokoll
+  sprechen statt dem öffentlichen Meshtastic-Mesh beizutreten. Das ist eine strategische
+  Scope-Frage, keine rein technische — sollte der Nutzer entscheiden, bevor daran
+  weitergebaut wird.
 
 ---
 

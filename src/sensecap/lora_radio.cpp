@@ -79,13 +79,56 @@ Module g_module(&g_hal, VPIN_NSS, VPIN_DIO1, VPIN_RST, VPIN_BUSY);
 SX1262 g_radio(&g_module);
 bool g_ready = false;
 
+// Root cause of the long-standing CHIP_NOT_FOUND (Issue #36): SX126x::reset()
+// pulses RST and, with no settling delay at all, immediately starts hammering
+// standby() over SPI. On real hardware the chip needs a short settle time
+// after RST release before it answers reliably -- normally invisible because
+// a plain GPIO reset+first-SPI-command happens with enough incidental
+// latency, but with RST/BUSY routed through this I2C IO-expander, RadioLib's
+// own reset()-then-standby() sequence ran too close together and consistently
+// got back all-zero SPI status bytes (confirmed via RADIOLIB_DEBUG_SPI: every
+// GET_STATUS during the retry loop returned 0x00 0x00 for a full 10s before
+// giving up). Doing our own reset with an explicit settle delay before
+// handing control to RadioLib makes it succeed on the first try, every time
+// (verified across repeated power cycles).
+//
+// The GET_STATUS probe itself is a cheap sanity check, not the fix: it just
+// confirms the chip actually answered (a real status byte is never 0x00).
+bool lora_radio_wake_chip() {
+  ioexp_set_pin_output(IOEXP_LORA_NSS);
+  ioexp_write_pin(IOEXP_LORA_NSS, true);
+  ioexp_set_pin_output(IOEXP_LORA_RST);
+  ioexp_set_pin_input(IOEXP_LORA_BUSY);
+  ioexp_set_pin_input(IOEXP_LORA_DIO1);
+
+  ioexp_write_pin(IOEXP_LORA_RST, false);
+  delay(2);
+  ioexp_write_pin(IOEXP_LORA_RST, true);
+  delay(20); // settle time RadioLib's own reset() doesn't wait for
+
+  SPI.begin(LORA_SCK_PIN, LORA_MISO_PIN, LORA_MOSI_PIN, -1);
+  SPI.beginTransaction(SPISettings(2000000, MSBFIRST, SPI_MODE0));
+  ioexp_write_pin(IOEXP_LORA_NSS, false);
+  uint8_t status1 = SPI.transfer(0xC0); // GET_STATUS
+  uint8_t status2 = SPI.transfer(0x00);
+  ioexp_write_pin(IOEXP_LORA_NSS, true);
+  SPI.endTransaction();
+
+  bool alive = (status1 != 0x00) || (status2 != 0x00);
+  Serial.printf("[LORA] Wake-Probe: GET_STATUS -> 0x%02X 0x%02X (%s)\n", status1, status2,
+                alive ? "Chip antwortet" : "keine Antwort");
+  return alive;
+}
+
 } // namespace
 
 bool lora_radio_begin() {
-  Serial.println("[LORA] SX1262 init (EXPERIMENTAL, raw LoRa only)...");
-  // EU868 default per org profile (see CLAUDE org instructions: EU868,
-  // Klasse A, ADR aktiv — ADR/class don't apply to this raw test, but
-  // the frequency does).
+  if (!lora_radio_wake_chip()) {
+    Serial.println("[LORA] Kein SX1262 auf dem Bus erreichbar, breche ab");
+    return false;
+  }
+  // EU868 default per org profile (EU868, Klasse A, ADR aktiv) -- ADR/class
+  // don't apply to this raw test, but the frequency does.
   int16_t state = g_radio.begin(868.0);
   g_ready = (state == RADIOLIB_ERR_NONE);
   Serial.printf("[LORA] begin() -> %d (%s)\n", state, g_ready ? "OK" : "FEHLER");
