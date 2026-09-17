@@ -297,9 +297,11 @@ SX1262 antwortet noch nicht zuverlässig. Details und nächste Schritte in
   Partitionstabelle), auf dem Kopf montiertes Panel, und Rendering-Glitches durch
   fehlenden Doppelpuffer (behoben über Cache-Writeback + Frame-Sync-Callback +
   reduzierten Pixeltakt) — siehe Board-README für die volle Fehlersuche-Geschichte.
-- Meshtastic-Anbindung für das neue Board noch offen: kein freier GPIO für eine
-  externe Node, eingebautes SX1262 antwortet noch nicht zuverlässig (I2C-vermitteltes
-  BUSY-Timing vermutet). Dokumentiert in [Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/36).
+- Meshtastic-Anbindung für das neue Board: eingebautes SX1262 sendet/empfängt jetzt
+  zuverlässig rohes LoRa (Reset-Settle-Timing-Fix, nicht das vermutete BUSY-Timing).
+  Externe Node über UART bleibt aus GPIO-Mangel verworfen. Echte Meshtastic-Protokoll-
+  Kompatibilität (Verschlüsselung/Routing/Kanäle) ist der jetzt eigentliche offene
+  Punkt — strategische Scope-Frage, dokumentiert in [Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/36).
 - `src/` neu strukturiert für mehrere Boards: `src/xiao/`, `src/common/`
   (gemeinsam genutztes `lage_db`), `src/sensecap/`.
 
