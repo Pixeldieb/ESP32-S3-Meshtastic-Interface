@@ -148,6 +148,26 @@ void lageDbListSummary(const String& filterKategorie, const String& filterStatus
   if (errMsg) { Serial.println(errMsg); sqlite3_free(errMsg); }
 }
 
+int lageDbGetRecentSummaries(LageMeldungSummary* out, int maxCount) {
+  const char* sql = "SELECT rowid, kategorie, status, text, updated_at "
+                     "FROM lagemeldungen ORDER BY updated_at DESC LIMIT ?;";
+  sqlite3_stmt* stmt;
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return 0;
+  sqlite3_bind_int(stmt, 1, maxCount);
+
+  int count = 0;
+  while (count < maxCount && sqlite3_step(stmt) == SQLITE_ROW) {
+    out[count].id = sqlite3_column_int(stmt, 0);
+    out[count].kategorie = String((const char*)sqlite3_column_text(stmt, 1));
+    out[count].status = String((const char*)sqlite3_column_text(stmt, 2));
+    out[count].text = String((const char*)sqlite3_column_text(stmt, 3));
+    out[count].updatedAt = (unsigned long)sqlite3_column_int64(stmt, 4);
+    count++;
+  }
+  sqlite3_finalize(stmt);
+  return count;
+}
+
 void lageDbShowDetail(int id) {
   Serial.print("--- Detail Lagemeldung ");
   Serial.print(id);

@@ -27,6 +27,7 @@ Ein Seeed XIAO ESP32-S3 verbindet sich per UART mit einer Meshtastic-Node (Seeed
 - [Testen](#-testen-ob-alles-funktioniert)
 - [Troubleshooting](#-troubleshooting)
 - [Weiterführende Links](#-weiterführende-links)
+- [📺 SenseCAP Indicator (zweites Board)](#-sensecap-indicator-zweites-board)
 - [Changelog](#-changelog)
 - [Lizenz](#-lizenz)
 
@@ -254,6 +255,24 @@ Seriellen Monitor des Brain-Boards währenddessen offen halten und nach jeder ge
 
 ---
 
+## 📺 SenseCAP Indicator (zweites Board)
+
+Zweites unterstütztes Board: ein Seeed SenseCAP Indicator (D1L) mit 480×480-
+Touchscreen, das Menü/Notfall-Flow/Datenbank auf **einem** Board zeigt statt der
+ESP32↔nRF52-Zwei-Board-Lösung oben.
+
+Build/Flash: `pio run -e sensecap_indicator -t upload`
+
+Ausführliche Doku (Hardware-Bring-up-Story, bekannte Gotchas, Architektur,
+aktueller Stand der Meshtastic-Anbindung): **[src/sensecap/README.md](src/sensecap/README.md)**.
+
+Kurzstand: Display/Touch/Menü/Datenbank laufen stabil. Meshtastic-Anbindung noch
+nicht funktional — kein freier GPIO für eine externe Node gefunden, eingebauter
+SX1262 antwortet noch nicht zuverlässig. Details und nächste Schritte in
+[Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/36).
+
+---
+
 ## 🔗 Weiterführende Links
 
 - [Seeed XIAO ESP32-S3 – Getting Started](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/)
@@ -266,6 +285,23 @@ Seriellen Monitor des Brain-Boards währenddessen offen halten und nach jeder ge
 ---
 
 ## 📝 Changelog
+
+### 2026-09-17
+
+- **Zweites Board: Seeed SenseCAP Indicator (D1L)** — eigenständiges Touchscreen-
+  Terminal (480×480, ST7701S/FT6336U), `env:sensecap_indicator` in `platformio.ini`.
+  Menü/Notfall-Flow (Auswahl → Bestätigung mit Halte-Geste → Senden → Erfolg/
+  Fehlschlag), Lagemeldungen in SQLite (wiederverwendet von der XIAO-Säule),
+  Statusleiste, Notmeldungshistorie. Details: [src/sensecap/README.md](src/sensecap/README.md).
+- Umfangreiches Hardware-Bring-up nötig: Bootloop-Ursachen (PSRAM-/Flash-Modus,
+  Partitionstabelle), auf dem Kopf montiertes Panel, und Rendering-Glitches durch
+  fehlenden Doppelpuffer (behoben über Cache-Writeback + Frame-Sync-Callback +
+  reduzierten Pixeltakt) — siehe Board-README für die volle Fehlersuche-Geschichte.
+- Meshtastic-Anbindung für das neue Board noch offen: kein freier GPIO für eine
+  externe Node, eingebautes SX1262 antwortet noch nicht zuverlässig (I2C-vermitteltes
+  BUSY-Timing vermutet). Dokumentiert in [Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/36).
+- `src/` neu strukturiert für mehrere Boards: `src/xiao/`, `src/common/`
+  (gemeinsam genutztes `lage_db`), `src/sensecap/`.
 
 ### 2026-09-16
 

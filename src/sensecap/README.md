@@ -1,0 +1,133 @@
+# SenseCAP Indicator (D1L) — Board-Notizen
+
+Zweites unterstütztes Board neben der XIAO-ESP32-S3-Säule (siehe Haupt-README).
+Touchscreen-Terminal mit Display, Datenbank und (angefangener) Meshtastic-Anbindung
+auf **einem** Board statt der ESP32↔nRF52-Zwei-Board-Lösung.
+
+Build/Flash: `pio run -e sensecap_indicator -t upload`
+
+---
+
+## 1. Status (Stand 2026-09-17)
+
+| Teil | Status |
+|---|---|
+| Display (ST7701S 480x480 RGB) + Touch (FT6336U) | ✅ läuft stabil |
+| Menü/Notfall-Flow (LVGL, `ui_model.cpp`) | ✅ läuft, inkl. Halte-Bestätigung, Sende-/Erfolg/Fehlschlag-Screens |
+| Lagemeldungen in SQLite (`lage_db`, wiederverwendet von der XIAO-Säule) | ✅ läuft |
+| Uhrzeit | ⚠️ nur Build-Zeitpunkt automatisch gesetzt, kein RTC/NTP — `settime YYYY-MM-DD HH:MM:SS` über Serial |
+| Meshtastic-Anbindung | ❌ noch nicht funktional — siehe [Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/36) |
+| Standby-Screen, Alarm-Blinken, Batterie/Solar/Netz-Symbol | ❌ noch nicht begonnen |
+| Lokaler Betreiber / Onboarding | ⚠️ nur Datenstruktur (`station_config.h`), noch keine Eingabe-UI |
+
+---
+
+## 2. Hardware-Bring-up — was hart erkämpft war
+
+Diese Einstellungen in `platformio.ini` (`env:sensecap_indicator`) sind **nicht optional**,
+sondern durch Trial-and-Error an echter Hardware gefunden (siehe Git-Historie für die
+volle Fehlersuche-Geschichte):
+
+- `board_build.flash_mode = dio`, `board_build.arduino.memory_type = dio_opi` —
+  jede QIO-Variante bootloopt (ROM meldet unabhängig von unserer Konfiguration `mode:DIO`,
+  das PSRAM auf dieser Einheit ist Octal, nicht Quad).
+- `board_build.partitions = default_8MB.csv` — Flash ist 8 MB
+  (bestätigt via `esptool.py flash_id`), `default_16MB.csv` bootloopt.
+- `platform = espressif32@5.4.0` (ESP-IDF 4.x) — `Arduino_GFX`s RGB-Panel-Treiber
+  verträgt sich nicht mit ESP-IDF 5.x.
+- Panel ist physisch **auf dem Kopf montiert** — 180°-Korrektur in
+  `main.cpp` (`lvgl_disp_flush`) und `touch.cpp`, nicht im Treiber.
+
+### Rendering-Glitches (das eigentliche Kernproblem)
+
+Der Panel-Treiber dieser ESP-IDF-Version hat **keinen Doppelpuffer** — ein einzelner
+PSRAM-Framebuffer wird kontinuierlich per DMA gescannt, während wir gleichzeitig
+hineinschreiben. Behoben durch drei zusammenwirkende Maßnahmen (jede für sich war
+nicht ausreichend):
+
+1. **Cache-Writeback** nach jedem Schreiben (`Cache_WriteBack_Addr`) — PSRAM läuft über
+   den CPU-Cache, die DMA liest direkt aus dem PSRAM und sah sonst veraltete Daten.
+2. **Frame-Sync**: eigener `esp_lcd_new_rgb_panel`-Aufruf (nicht über `Arduino_GFX`,
+   die das nicht exponiert) mit `on_frame_trans_done`-Callback — Schreibvorgänge warten
+   auf den Beginn eines neuen Frames, statt an einem zufälligen Punkt mitten im Scan zu starten.
+3. **PCLK gesenkt** (12→6 MHz): Ein voller Bildschirm-Kopiervorgang brauchte ~26-29ms,
+   eine Bildperiode bei 12 MHz nur ~23ms — die Anzeige-Hardware hat uns also strukturell
+   überholt, egal wie gut synchronisiert. Bei 6 MHz (~44ms Periode) reicht die Zeit.
+   Kosten: niedrigere Bildwiederholrate (~22Hz), für ein Status-Menü unproblematisch.
+4. Kopierrichtung im Flush-Loop an die physische Scan-Richtung angepasst (beide
+   räumen in dieselbe Richtung, statt sich entgegenzulaufen).
+
+**Falls nach dem nächsten LVGL-/Bibliotheks-Update wieder Glitches auftauchen:** zuerst
+`disp_drv.full_refresh` prüfen (muss `0` sein, siehe Kommentar in `main.cpp`) und die
+vier Punkte oben der Reihe nach neu verifizieren.
+
+---
+
+## 3. Architektur
+
+- `main.cpp` — Display/Touch-Bring-up, LVGL-Glue, `setup()`/`loop()`.
+- `display_profiles/sensecap_indicator_d1l.h` — alle Pin-/Timing-Konstanten für **dieses**
+  Display. Neues Display = neue Profildatei mit denselben Makronamen + Include tauschen,
+  sonst nichts anfassen.
+- `io_expander.h/.cpp` — TCA9535-Treiber (I2C). Gated: LCD CS/RST, Touch-RST,
+  LoRa NSS/RST/BUSY/DIO1.
+- `touch.h/.cpp` — FT6336U (Single- und Dual-Touch-Lesen; Dual wird aktuell nirgends
+  mehr gebraucht, das Panel hat ohnehin kein echtes Multitouch, siehe unten).
+- `ui_model.h/.cpp` — das komplette Menü/Notfall-Flow (Hand-Nachbau von `ui/ui.yaml`,
+  siehe `ui/README.md` Abschnitt 19 für das hardware-neutrale Bedienkonzept).
+- `station_config.h/.cpp` — lokaler Betreiber/Stations-ID, Ansatzpunkt für ein
+  künftiges Onboarding (noch keine Eingabe-UI).
+- `wall_clock.h/.cpp` — echte Uhrzeit (kein RTC, wird beim Flashen aus der Build-Zeit
+  gesetzt, sonst per `settime`).
+- `meshtastic_bridge.h/.cpp` — externe-Node-Anbindung (Weg 2), **noch nicht aktiv**
+  (kein freier GPIO gefunden, siehe unten).
+- `lora_radio.h/.cpp` — Onboard-SX1262 direkt (Weg 1), **experimentell, nicht
+  Meshtastic-kompatibel**, Chip antwortet noch nicht zuverlässig.
+
+---
+
+## 4. Kein Multitouch
+
+Die Halte-Bestätigung (`emergency_confirmation`) sollte ursprünglich zwei
+Kontext-Tasten gleichzeitig gehalten verlangen (ui.yaml-Vorlage). Das Panel liefert
+aber nachweislich keine zwei simultanen Touch-Punkte. Umgesetzt stattdessen als
+**eine** Taste, 3 Sekunden halten (`confirm_btn_press_cb`, LVGL PRESSED/PRESSING/
+RELEASED-Events, kein eigenes Touch-Polling mehr nötig).
+
+---
+
+## 5. Meshtastic-Anbindung — der offene Punkt
+
+Siehe **[Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/36)**
+für den vollen Stand. Kurzfassung:
+
+- **Weg 2 (externe Node über UART, wie die XIAO-Säule):** Kein sicherer freier GPIO
+  auf diesem ESP32-S3 mehr. GPIO22-25 sind laut `uart_set_pin` ungültig, GPIO26/27
+  hängen den Chip komplett auf (vermutlich SPI-Flash/PSRAM-Leitungen — **dort nicht
+  weiter testen**). Naheliegendster nächster Schritt: RP2040-Co-Prozessor als Relay
+  nutzen (der hat echte freie Pins), Bytes über die vorhandene interne ESP32↔RP2040-
+  UART durchreichen.
+- **Weg 1 (eingebautes SX1262 direkt, `lora_radio.cpp`):** Kein Absturz mehr (eigene
+  `RadioLibHal`, die NSS/RST/BUSY/DIO1 auf den IO-Expander umleitet), aber
+  `SX1262::begin()` liefert `RADIOLIB_ERR_CHIP_NOT_FOUND`. Wahrscheinliche Ursache:
+  BUSY-Abfrage läuft über I2C (langsam/undeterministisch), das SX126x-Protokoll
+  erwartet aber engelegte GPIO-Reads während der SPI-Transaktion.
+  **Wichtig:** Selbst wenn das SPI-Timing gelöst wird, ist das noch **kein**
+  Meshtastic — nur rohes LoRa. Echte Mesh-Kompatibilität (Verschlüsselung, Routing,
+  Kanäle) bräuchte zusätzlich entweder eine eigene Protokoll-Nachbildung oder eine
+  Integration der echten Meshtastic-Firmware.
+
+---
+
+## 6. Bekannte Platzhalter (bewusst, nicht vergessen)
+
+- Info-Historie/Lageinformationen zeigen `lage_db`-Einträge inkl. 3 Beispieleinträgen,
+  die beim ersten Boot einmalig geseedet werden (SPIFFS persistiert, kein erneutes
+  Seeden bei jedem Boot).
+- Status-Leiste: TX/RX-Punkte sind verdrahtet, blinken aber erst bei echtem Funkverkehr
+  (`ui_model_notify_tx/rx`). ONLINE/OFFLINE hängt an `ui_model_set_connected`, aktuell
+  fest `false` (keine Bridge aktiv). `testconnect on|off` über Serial überschreibt das
+  nur zu Testzwecken — keine echte Verbindung.
+- `do_trigger_emergency` speichert die Meldung immer in `lage_db` (Status wandert
+  „wird übermittelt" → „übermittelt"/„fehlgeschlagen") — unabhängig davon, ob wirklich
+  etwas gesendet wurde.
