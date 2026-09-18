@@ -23,3 +23,14 @@ void ui_model_notify_rx();
 // still works, but now it's overriding a real signal, not standing in
 // for a nonexistent one.
 void ui_model_set_connected(bool connected);
+
+// Testing-only (2026-09-18): drives the exact same path a real touchscreen
+// hold-confirm does (do_trigger_emergency() -> start_transmission() ->
+// the real g_transmission_pending/ACK-wait machinery in ui_model_tick()),
+// unlike main.cpp's older "test emergency" serial command which only
+// calls meshtastic_send_emergency() directly and therefore never touches
+// VG-numbering, the stage rows, eventLog "Notmeldung..." entries, or the
+// success/failure screens -- found live while trying to test the failure
+// screen (B4) without physical touch access: that command's silence on
+// timeout wasn't a bug, it just never was driving that machinery at all.
+void ui_model_test_trigger_emergency(const char *category, const char *type, const char *label);

@@ -593,7 +593,7 @@ void setup() {
   Serial.println("Testnachricht senden: mesh send <text>");
   Serial.println("Leitstelle fuer Notmeldungen festlegen: dispatch set <hex-node-id, z.B. ce0ffa28>");
   Serial.println("Absender-Allowlist verwalten: allow add|revoke <hex-node-id>, allow list");
-  Serial.println("Heartbeat sofort senden (laeuft sonst automatisch alle 2 Minuten): test heartbeat");
+  Serial.println("Heartbeat sofort senden (laeuft sonst automatisch alle 15 Minuten): test heartbeat");
   Serial.println("Lokales Ereignisprotokoll ansehen: events");
   Serial.println("Nur zum Testen (Status-UI ohne echten Zustand): testconnect on|off\n");
 }
@@ -624,12 +624,24 @@ void loop() {
       station_config_set_dispatch_node(nodeNum);
       Serial.printf("[OK] Leitstelle fuer Notmeldungen gesetzt: !%08x\n", (unsigned)nodeNum);
     } else if (line == "test emergency") {
-      // Exercises the exact same path as the touchscreen hold-confirm
-      // (direct message + ACK request on the private channel), without
-      // needing to physically touch the screen. Diagnostic only.
+      // Radio/protocol layer only -- calls meshtastic_send_emergency()
+      // directly, same as a touchscreen send at the wire-protocol level
+      // (direct message + ACK request on the private channel). Does NOT
+      // go through ui_model's g_transmission_pending/ACK-wait state
+      // machine, so it never triggers VG-numbering, the stage rows, the
+      // "Notmeldung..." eventLog entries, or the success/failure screens
+      // -- found live 2026-09-18 while trying to test the failure screen
+      // this way and seeing nothing happen after the 8s timeout elapsed.
+      // Use "test emergency ui" below for that.
       bool ok = meshtastic_send_emergency("fire_department", "test", "Serial-Testmeldung");
       Serial.printf("[TEST] meshtastic_send_emergency() -> %s (radio lokal), warte bis zu 8s auf ACK...\n",
                     ok ? "OK" : "FEHLER");
+    } else if (line == "test emergency ui") {
+      // The real thing: same do_trigger_emergency()/start_transmission()
+      // path a touchscreen hold-confirm uses, so this actually exercises
+      // VG-numbering, the stage rows, eventLog, and the success/failure
+      // screens -- for testing those without physical touch access.
+      ui_model_test_trigger_emergency("fire_department", "test", "UI-Testmeldung");
     } else if (line.startsWith("allow add ")) {
       uint32_t nodeNum = strtoul(line.substring(10).c_str(), nullptr, 16);
       if (meshSecurityAllow(nodeNum)) {
@@ -653,16 +665,28 @@ void loop() {
         Serial.printf("#%d [%lu] %s: %s\n", events[i].id, events[i].zeit, events[i].kategorie.c_str(),
                       events[i].text.c_str());
       }
+    } else if (line == "liste") {
+      // Testprotokoll F2 (2026-09-18): SenseCAP had no equivalent of
+      // XIAO's "liste" for inspecting lagemeldungen directly -- flagged as
+      // a gap then, needed now for debugging why Lageinformationen shows
+      // nothing.
+      lageDbListSummary();
+    } else if (line.startsWith("liste kategorie ")) {
+      lageDbListSummary(line.substring(17), "");
+    } else if (line.startsWith("liste status ")) {
+      lageDbListSummary("", line.substring(13));
+    } else if (line.startsWith("detail ")) {
+      lageDbShowDetail(line.substring(7).toInt());
     }
   }
 
   // Issue #13: periodic presence so a Leitstelle watching several stations
-  // notices one going silent. Interval is deliberately short for today's
-  // testing (2 min) -- for a real deployment this should be tuned way up
-  // (e.g. 15-30 min) to respect EU868's duty-cycle limit, see
-  // meshtastic_send_heartbeat()'s comment.
+  // notices one going silent. Was 2 min during early testing; Testprotokoll
+  // 2026-09-18 (D1/F1) found that too aggressive for EU868's duty-cycle
+  // limit on a live mesh with several nodes -- raised to 15 min, the user's
+  // stated minimum acceptable spacing.
   static unsigned long lastHeartbeatAt = 0;
-  const unsigned long HEARTBEAT_INTERVAL_MS = 2UL * 60 * 1000;
+  const unsigned long HEARTBEAT_INTERVAL_MS = 15UL * 60 * 1000;
   if (now - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {
     lastHeartbeatAt = now;
     meshtastic_send_heartbeat();
