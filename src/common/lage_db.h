@@ -24,10 +24,22 @@ struct LageMeldungSummary {
   String status;
   String text;
   unsigned long updatedAt;
+  // "!<hex-node-id>" for a report actually received over the mesh,
+  // "!lokal-touch" for one this station triggered itself (see
+  // do_trigger_emergency() in ui_model.cpp) -- the two must never be shown
+  // interchangeably as "empfangene offizielle Meldungen" (Testprotokoll C1,
+  // 2026-09-18).
+  String fromNode;
 };
 
 // Fills `out` (capacity `maxCount`) with the most recently updated
-// Lagemeldungen, newest first. Returns how many were written.
+// Lagemeldungen, newest first (no filtering by source -- see the .cpp for
+// why a WHERE-based filter was tried and reverted: it made sqlite3_step()
+// fail with a disk I/O error on this platform). Returns how many were
+// written. Callers that only want externally-received reports (not this
+// station's own "!lokal-touch" entries) must fetch a generously large
+// maxCount and filter in C++ -- see build_info_list_page() in
+// src/sensecap/ui_model.cpp.
 int lageDbGetRecentSummaries(LageMeldungSummary* out, int maxCount);
 
 // Issue #33: local, append-only log of operationally relevant events
