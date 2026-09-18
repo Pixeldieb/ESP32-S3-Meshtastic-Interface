@@ -53,8 +53,27 @@
    HAL SETTINGS
  *====================*/
 
-/* Default display refresh period in milliseconds */
-#define LV_DISP_DEF_REFR_PERIOD 10  /* ~100 fps target */
+/* Default display refresh period in milliseconds.
+ * Was 10ms ("~100fps target") -- found live (2026-09-18) that this badly
+ * mismatches what src/sensecap/main.cpp's lvgl_disp_flush() can actually
+ * deliver: full_refresh=1 means every single invalidation triggers one
+ * full-screen flush, and flush_cb's own comment documents the panel's
+ * real native frame period as ~23ms (~43fps). Asking LVGL to retry a full
+ * flush every 10ms when each one can only ever complete every ~23ms just
+ * means it's constantly re-triggering a flush that's already in flight /
+ * about to be superseded -- wasted work that widened the window for the
+ * flush's frame-done wait to slip and show a tear, especially once more
+ * screens/animations meant more frequent invalidations. Set to roughly
+ * match the panel's real cadence instead of racing ahead of it.
+ *
+ * 30fps (33ms) chosen over the panel's native ~43fps ceiling on purpose:
+ * this UI is status text/simple transitions, not motion graphics, and
+ * 30fps is the standard "reads as smooth to a human" threshold (same one
+ * film/video uses) -- no perceptible loss versus 40fps here, but more
+ * slack around the flush's frame-done wait, which matters more for a
+ * safety-critical terminal than a few extra fps would. Touch response
+ * is unaffected (LV_INDEV_DEF_READ_PERIOD below is separate). */
+#define LV_DISP_DEF_REFR_PERIOD 33  /* ~30 fps target -- human-perception threshold, extra sync margin */
 
 /* Input device read period in milliseconds */
 #define LV_INDEV_DEF_READ_PERIOD 10  /* Faster touch polling */
