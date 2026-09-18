@@ -4,6 +4,7 @@
 namespace {
 const char *kPrefsNamespace = "kaynafunkt";
 const char *kDispatchKey = "dispatch";
+const char *kLocationKey = "location";
 bool g_loaded = false;
 } // namespace
 
@@ -24,6 +25,12 @@ StationConfig &station_config() {
     Preferences prefs;
     prefs.begin(kPrefsNamespace, /*readOnly=*/true);
     cfg.dispatchNodeNum = prefs.getUInt(kDispatchKey, 0);
+    // getString() (unlike getUInt()) logs an ESP_LOGE "len fail: NOT_FOUND"
+    // for a missing key even though the default is still returned
+    // correctly -- checking isKey() first avoids that misleading error
+    // line on a station's very first boot, before anyone has ever set a
+    // location.
+    cfg.locationText = prefs.isKey(kLocationKey) ? prefs.getString(kLocationKey, "") : "";
     prefs.end();
     g_loaded = true;
   }
@@ -36,5 +43,14 @@ void station_config_set_dispatch_node(uint32_t nodeNum) {
   Preferences prefs;
   prefs.begin(kPrefsNamespace, /*readOnly=*/false);
   prefs.putUInt(kDispatchKey, nodeNum);
+  prefs.end();
+}
+
+void station_config_set_location(const String &text) {
+  station_config().locationText = text; // ensures cfg is loaded first
+
+  Preferences prefs;
+  prefs.begin(kPrefsNamespace, /*readOnly=*/false);
+  prefs.putString(kLocationKey, text);
   prefs.end();
 }

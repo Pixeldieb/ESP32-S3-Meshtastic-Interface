@@ -23,6 +23,18 @@ struct StationConfig {
   // every reboot/reflash during testing, causing sends that looked
   // identical to previously-working ones to fail with no code change.
   uint32_t dispatchNodeNum = 0;
+
+  // Manual location text (Testprotokoll B3, 2026-09-18: emergency reports
+  // had no location at all). This board has no GPS hardware, so there is
+  // no automatic option -- see station_config_set_location(). Empty = not
+  // set yet. Persisted to NVS like dispatchNodeNum.
+  String locationText = "";
+
+  // Settings-screen PIN gate (Testprotokoll A1, 2026-09-18: main menu
+  // needed a code-protected settings entry). Hardcoded placeholder like
+  // stationId/operatorName above -- a real onboarding flow should make
+  // this operator-settable instead.
+  String settingsPin = "1234";
 };
 
 // Single shared instance. Other fields are hardcoded for now (see the
@@ -34,3 +46,7 @@ StationConfig &station_config();
 // NVS, so it survives the next reboot/reflash) — use this instead of
 // assigning station_config().dispatchNodeNum directly.
 void station_config_set_dispatch_node(uint32_t nodeNum);
+
+// Sets locationText (live + persisted to NVS), same pattern as
+// station_config_set_dispatch_node().
+void station_config_set_location(const String &text);
