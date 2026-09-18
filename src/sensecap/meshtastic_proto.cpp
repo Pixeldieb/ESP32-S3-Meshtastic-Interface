@@ -40,6 +40,7 @@ static_assert(sizeof(PacketHeaderRaw) == 16, "must match MESHTASTIC_HEADER_LENGT
 constexpr uint32_t kNodenumBroadcast = 0xFFFFFFFFu;    // MeshTypes.h NODENUM_BROADCAST
 constexpr uint8_t kHopLimitDefault = 3;                // MeshTypes.h HOP_RELIABLE
 constexpr uint8_t kFlagsHopLimitMask = 0x07;
+constexpr uint8_t kFlagsWantAckMask = 0x08;  // RadioInterface.h PACKET_FLAGS_WANT_ACK_MASK
 constexpr uint8_t kFlagsHopStartShift = 5;
 constexpr uint8_t kFlagsHopStartMask = 0xE0;
 constexpr size_t kMaxPayload = 233; // meshtastic_Data_payload_t = PB_BYTES_ARRAY_T(233)
@@ -124,6 +125,117 @@ uint32_t deriveNodeNum() {
   return num;
 }
 
+// Builds the 16-byte header + encrypted protobuf payload and transmits it.
+// hopLimit=0 is what real firmware uses for direct ACK replies
+// (RoutingModule::sendAckNak's own default, see MeshModule::allocAckNak) --
+// zero hops means "don't relay this, it's only meant for whoever's in
+// direct radio range", appropriate for an ACK responding to a packet we
+// just received directly. Normal originated traffic uses kHopLimitDefault.
+bool sendData(uint32_t toNode, const meshtastic_Data &data, uint8_t hopLimit = kHopLimitDefault) {
+  if (!g_started) {
+    Serial.println("[MESH] sendData: Protokoll nicht gestartet");
+    return false;
+  }
+
+  uint8_t plain[kMaxPayload];
+  pb_ostream_t ostream = pb_ostream_from_buffer(plain, sizeof(plain));
+  if (!pb_encode(&ostream, meshtastic_Data_fields, &data)) {
+    Serial.println("[MESH] sendData: pb_encode fehlgeschlagen");
+    return false;
+  }
+  size_t plainLen = ostream.bytes_written;
+
+  uint32_t packetId = esp_random();
+  if (packetId == 0) packetId = 1;
+
+  aesCtrCrypt(g_myNodeNum, packetId, plain, plainLen);
+
+  PacketHeaderRaw header;
+  header.to = toNode;
+  header.from = g_myNodeNum;
+  header.id = packetId;
+  header.flags = hopLimit & kFlagsHopLimitMask;
+  header.flags |= (hopLimit << kFlagsHopStartShift) & kFlagsHopStartMask;
+  header.channel = defaultChannelHash();
+  header.next_hop = 0;
+  header.relay_node = 0;
+
+  uint8_t wire[sizeof(PacketHeaderRaw) + kMaxPayload];
+  memcpy(wire, &header, sizeof(header));
+  memcpy(wire + sizeof(header), plain, plainLen);
+  size_t wireLen = sizeof(header) + plainLen;
+
+  SX1262 &radio = lora_radio_instance();
+  int16_t state = radio.transmit(wire, wireLen);
+  Serial.printf("[MESH] sendData portnum=%d an !%08x (id=0x%08x, %u Bytes) -> transmit() = %d (%s)\n", (int)data.portnum,
+                (unsigned)toNode, (unsigned)packetId, (unsigned)wireLen, state, state == RADIOLIB_ERR_NONE ? "OK" : "FEHLER");
+  radio.startReceive(); // resume listening (transmit() leaves the radio in standby)
+  return state == RADIOLIB_ERR_NONE;
+}
+
+// NextHopRouter.cpp: "if (!perhapsRebroadcast(p) && isToUs(p) && p->want_ack)
+// sendAckNak(meshtastic_Routing_Error_NONE, getFrom(p), p->id, p->channel, 0)"
+// -- a Routing-portnum Data message, error_reason=NONE, request_id=the
+// packet we're acking, hop_limit=0, want_ack=false on the ack itself (no
+// ack-for-the-ack). We never rebroadcast (we're a leaf node), so the
+// "!perhapsRebroadcast" condition is always true for us here.
+void sendRoutingAck(uint32_t toNode, uint32_t requestId) {
+  meshtastic_Routing routing = meshtastic_Routing_init_zero;
+  routing.which_variant = meshtastic_Routing_error_reason_tag;
+  routing.error_reason = meshtastic_Routing_Error_NONE;
+
+  uint8_t routingBytes[16];
+  pb_ostream_t rstream = pb_ostream_from_buffer(routingBytes, sizeof(routingBytes));
+  if (!pb_encode(&rstream, meshtastic_Routing_fields, &routing)) {
+    Serial.println("[MESH] sendRoutingAck: pb_encode(Routing) fehlgeschlagen");
+    return;
+  }
+
+  meshtastic_Data data = meshtastic_Data_init_zero;
+  data.portnum = meshtastic_PortNum_ROUTING_APP;
+  memcpy(data.payload.bytes, routingBytes, rstream.bytes_written);
+  data.payload.size = rstream.bytes_written;
+  data.request_id = requestId;
+
+  Serial.printf("[MESH] Sende ACK an !%08x fuer Paket 0x%08x\n", (unsigned)toNode, (unsigned)requestId);
+  sendData(toNode, data, /*hopLimit=*/0);
+}
+
+// Real apps need to know who we are (long/short name, hardware model)
+// before they'll properly treat us as a DM-capable node -- otherwise a
+// direct message to us shows as an unresolved/failed send even once our
+// ROUTING_APP ack above is working (found live: "brauche erst austausch
+// der user info, dann kann ich dm schreiben"). meshtastic_HardwareModel
+// has a real SENSECAP_INDICATOR value (70) -- accurate, since this really
+// is that hardware, just running our own firmware instead of stock
+// Meshtastic. Broadcast once at startup, and echoed directly back to
+// anyone who sends us their own NodeInfo first (a real handshake, not
+// just a one-shot announcement).
+void sendNodeInfo(uint32_t toNode) {
+  meshtastic_User user = meshtastic_User_init_zero;
+  snprintf(user.id, sizeof(user.id), "!%08x", (unsigned)g_myNodeNum);
+  snprintf(user.long_name, sizeof(user.long_name), "kayna-funkt SenseCAP");
+  snprintf(user.short_name, sizeof(user.short_name), "KF");
+  user.hw_model = meshtastic_HardwareModel_SENSECAP_INDICATOR;
+  user.is_licensed = false;
+  user.role = meshtastic_Config_DeviceConfig_Role_CLIENT;
+
+  uint8_t userBytes[meshtastic_User_size];
+  pb_ostream_t ustream = pb_ostream_from_buffer(userBytes, sizeof(userBytes));
+  if (!pb_encode(&ustream, meshtastic_User_fields, &user)) {
+    Serial.println("[MESH] sendNodeInfo: pb_encode(User) fehlgeschlagen");
+    return;
+  }
+
+  meshtastic_Data data = meshtastic_Data_init_zero;
+  data.portnum = meshtastic_PortNum_NODEINFO_APP;
+  memcpy(data.payload.bytes, userBytes, ustream.bytes_written);
+  data.payload.size = ustream.bytes_written;
+
+  Serial.printf("[MESH] Sende NodeInfo an !%08x\n", (unsigned)toNode);
+  sendData(toNode, data);
+}
+
 // Same LAGE: wire format src/xiao/main.cpp parses (see main README
 // "Lagemeldungen (kayna-funkt)"). State short-codes (LGE/NOR/WTG/SAB/SAUS)
 // aren't handled here -- this board's UI doesn't have that state concept.
@@ -173,6 +285,13 @@ void handleReceivedPacket(const uint8_t *buf, size_t len) {
     return;
   }
 
+  // Our own transmissions can come back to us via RF self-coupling (seen
+  // live: broadcasted NodeInfo, heard our own echo, replied to "ourselves"
+  // as if it were a stranger -> sent another NodeInfo -> heard THAT too ->
+  // infinite reply loop spamming the channel). Real firmware guards every
+  // reply path with isFromUs(); this is the equivalent single guard point.
+  if (header.from == g_myNodeNum) return;
+
   size_t cipherLen = len - sizeof(PacketHeaderRaw);
   if (cipherLen == 0 || cipherLen > kMaxPayload) return;
 
@@ -192,12 +311,39 @@ void handleReceivedPacket(const uint8_t *buf, size_t len) {
   Serial.printf("[MESH] Paket von !%08x an !%08x, portnum=%d, %u Bytes, RSSI=%.1fdBm SNR=%.1fdB\n", (unsigned)header.from,
                 (unsigned)header.to, (int)data.portnum, (unsigned)data.payload.size, rssi, snr);
 
+  // NextHopRouter.cpp: "if (!perhapsRebroadcast(p) && isToUs(p) && p->want_ack)
+  // sendAckNak(...)" -- only for packets addressed directly to us (not
+  // broadcast), and only if the sender actually asked for one.
+  bool addressedToUs = (header.to == g_myNodeNum);
+  bool wantAck = (header.flags & kFlagsWantAckMask) != 0;
+  if (addressedToUs && wantAck) {
+    sendRoutingAck(header.from, header.id);
+  }
+
   if (data.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) {
     char text[kMaxPayload + 1];
     size_t n = data.payload.size < sizeof(text) - 1 ? data.payload.size : sizeof(text) - 1;
     memcpy(text, data.payload.bytes, n);
     text[n] = '\0';
     handleTextMessage(header.from, text);
+  } else if (data.portnum == meshtastic_PortNum_ROUTING_APP) {
+    meshtastic_Routing routing = meshtastic_Routing_init_zero;
+    pb_istream_t rstream = pb_istream_from_buffer(data.payload.bytes, data.payload.size);
+    if (pb_decode(&rstream, meshtastic_Routing_fields, &routing) &&
+        routing.which_variant == meshtastic_Routing_error_reason_tag) {
+      Serial.printf("[MESH] ACK von !%08x fuer unser Paket 0x%08x, error_reason=%d%s\n", (unsigned)header.from,
+                    (unsigned)data.request_id, (int)routing.error_reason,
+                    routing.error_reason == meshtastic_Routing_Error_NONE ? " (zugestellt)" : "");
+    }
+  } else if (data.portnum == meshtastic_PortNum_NODEINFO_APP) {
+    meshtastic_User user = meshtastic_User_init_zero;
+    pb_istream_t ustream = pb_istream_from_buffer(data.payload.bytes, data.payload.size);
+    if (pb_decode(&ustream, meshtastic_User_fields, &user)) {
+      Serial.printf("[MESH] NodeInfo von !%08x: \"%s\" (%s)\n", (unsigned)header.from, user.long_name, user.short_name);
+    }
+    // Reply in kind so their app gets our identity right away, instead of
+    // waiting for our next periodic broadcast.
+    sendNodeInfo(header.from);
   }
 }
 
@@ -238,6 +384,12 @@ bool meshtastic_proto_begin() {
   state = radio.startReceive();
   g_started = (state == RADIOLIB_ERR_NONE);
   Serial.printf("[MESH] startReceive() -> %d (%s)\n", state, g_started ? "OK, lausche auf dem Default-Kanal" : "FEHLER");
+
+  // Announce ourselves so real nodes/apps that hear this build their node
+  // list entry (long/short name, hardware model) right away instead of
+  // only after their next unrelated interaction with us -- see the
+  // sendNodeInfo() comment for why this matters for DMs specifically.
+  if (g_started) sendNodeInfo(kNodenumBroadcast);
   return g_started;
 }
 
@@ -268,11 +420,6 @@ void meshtastic_proto_loop() {
 }
 
 bool meshtastic_proto_send_text(const char *text) {
-  if (!g_started) {
-    Serial.println("[MESH] send_text: Protokoll nicht gestartet");
-    return false;
-  }
-
   meshtastic_Data data = meshtastic_Data_init_zero;
   data.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
   size_t textLen = strlen(text);
@@ -280,42 +427,26 @@ bool meshtastic_proto_send_text(const char *text) {
   memcpy(data.payload.bytes, text, textLen);
   data.payload.size = textLen;
 
-  uint8_t plain[kMaxPayload];
-  pb_ostream_t ostream = pb_ostream_from_buffer(plain, sizeof(plain));
-  if (!pb_encode(&ostream, meshtastic_Data_fields, &data)) {
-    Serial.println("[MESH] send_text: pb_encode fehlgeschlagen");
-    return false;
-  }
-  size_t plainLen = ostream.bytes_written;
-
-  uint32_t packetId = esp_random();
-  if (packetId == 0) packetId = 1;
-
-  aesCtrCrypt(g_myNodeNum, packetId, plain, plainLen);
-
-  PacketHeaderRaw header;
-  header.to = kNodenumBroadcast;
-  header.from = g_myNodeNum;
-  header.id = packetId;
-  header.flags = kHopLimitDefault & kFlagsHopLimitMask;
-  header.flags |= (kHopLimitDefault << kFlagsHopStartShift) & kFlagsHopStartMask;
-  header.channel = defaultChannelHash();
-  header.next_hop = 0;
-  header.relay_node = 0;
-
-  uint8_t wire[sizeof(PacketHeaderRaw) + kMaxPayload];
-  memcpy(wire, &header, sizeof(header));
-  memcpy(wire + sizeof(header), plain, plainLen);
-  size_t wireLen = sizeof(header) + plainLen;
-
-  SX1262 &radio = lora_radio_instance();
-  int16_t state = radio.transmit(wire, wireLen);
-  Serial.printf("[MESH] Sende \"%s\" (id=0x%08x, %u Bytes) -> transmit() = %d (%s)\n", text, (unsigned)packetId,
-                (unsigned)wireLen, state, state == RADIOLIB_ERR_NONE ? "OK" : "FEHLER");
-  radio.startReceive(); // resume listening (transmit() leaves the radio in standby)
-  return state == RADIOLIB_ERR_NONE;
+  Serial.printf("[MESH] Sende Text \"%s\"\n", text);
+  // Broadcast, not addressed to a specific node -- real firmware "Never
+  // set[s] the want_ack flag on broadcast packets" (Router.cpp), so this
+  // can never get a real delivery ACK back, only a local "radio accepted
+  // it for transmission" confirmation. See meshtastic_send_emergency()'s
+  // comment for what that means for the emergency-report use case.
+  return sendData(kNodenumBroadcast, data);
 }
 
+// IMPORTANT for the emergency terminal's "success" display: this still
+// broadcasts (so anyone listening on the channel picks it up, not just one
+// pre-configured node), and real Meshtastic never ACKs broadcasts by
+// design (see meshtastic_proto_send_text()'s comment). So g_last_send_ok
+// (ui_model.cpp) can only ever mean "the radio transmitted it locally" --
+// never "someone actually received it", no matter how this function is
+// implemented. Real mesh-delivery confirmation needs sending as a direct
+// message to a specific, known node instead (which then DOES get a real
+// ROUTING_APP ack via handleReceivedPacket() -> sendRoutingAck(), already
+// implemented and verified against a real device) -- a station-config /
+// scope decision, not something to silently switch to here.
 bool meshtastic_send_emergency(const char *category, const char *type, const char *label) {
   char buf[160];
   snprintf(buf, sizeof(buf), "LAGE:NEU;%s;offen;%s (Touch-Terminal, Typ: %s)", category, label, type);
