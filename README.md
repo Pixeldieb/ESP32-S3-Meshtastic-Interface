@@ -266,9 +266,11 @@ Build/Flash: `pio run -e sensecap_indicator -t upload`
 Ausführliche Doku (Hardware-Bring-up-Story, bekannte Gotchas, Architektur,
 aktueller Stand der Meshtastic-Anbindung): **[src/sensecap/README.md](src/sensecap/README.md)**.
 
-Kurzstand: Display/Touch/Menü/Datenbank laufen stabil. Meshtastic-Anbindung noch
-nicht funktional — kein freier GPIO für eine externe Node gefunden, eingebauter
-SX1262 antwortet noch nicht zuverlässig. Details und nächste Schritte in
+Kurzstand: Display/Touch/Menü/Datenbank laufen stabil. Meshtastic-Anbindung läuft
+über den eingebauten SX1262 mit echtem Meshtastic-Protokoll (Paketformat,
+Verschlüsselung, Kanal-Hash — kein rohes/inkompatibles Signal), verifiziert per
+Selbstempfang und unabhängiger Krypto-Gegenrechnung; noch nicht gegen ein zweites
+echtes Meshtastic-Gerät getestet. Details in
 [Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/36).
 
 ---
@@ -285,6 +287,21 @@ SX1262 antwortet noch nicht zuverlässig. Details und nächste Schritte in
 ---
 
 ## 📝 Changelog
+
+### 2026-09-18
+
+- **SenseCAP Indicator: echtes Meshtastic-Protokoll** über den eingebauten SX1262
+  (nicht mehr nur rohes LoRa) — Paketheader, AES128-CTR-Verschlüsselung, Protobuf-
+  Payload und Kanal-Hash exakt nach `meshtastic/firmware`s eigenem Quellcode
+  nachgebaut (Frequenz/BW/SF/CR/Sync/Präambel ebenso). Protobuf-Definitionen nicht
+  handkodiert, sondern nanopb + Meshtastics eigene generierte Header vendored
+  (`lib/meshtastic_proto/`). Verifiziert per Selbstempfang-Roundtrip und
+  unabhängiger Krypto-Gegenrechnung in Python — noch nicht gegen ein zweites
+  echtes Meshtastic-Gerät getestet. Details: [src/sensecap/README.md](src/sensecap/README.md)
+  Abschnitt 5, [Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/36).
+- Die alte externe-Node-Bridge (`meshtastic_bridge.h/.cpp`, Weg 2) für dieses Board
+  entfernt — endgültig nicht machbar (kein freier GPIO, RP2040-Co-Prozessor hat keine
+  Hardware-Verbindung zum SX1262, siehe Board-README).
 
 ### 2026-09-17
 

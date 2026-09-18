@@ -4,7 +4,7 @@
 #include <lvgl.h>
 
 #include "lage_db.h"
-#include "meshtastic_bridge.h"
+#include "meshtastic_proto.h"
 #include "station_config.h"
 #include "wall_clock.h"
 
@@ -77,23 +77,21 @@ lv_obj_t *g_confirm_back_target = nullptr;
 EmergencyChoice g_selected{};
 
 // --- emergency_transmission state ---
-// meshtastic_bridge.cpp's mt_send_text() call is real and synchronous
-// (see start_transmission) — this delay only exists so "senden..." is
-// visible for a moment before showing the real outcome (g_last_send_ok),
-// instead of flashing past instantly.
+// meshtastic_proto.cpp's meshtastic_send_emergency() call is real and
+// synchronous (see start_transmission) — this delay only exists so
+// "senden..." is visible for a moment before showing the real outcome
+// (g_last_send_ok), instead of flashing past instantly.
 const unsigned long TRANSMISSION_SIMULATE_MS = 2000;
 bool g_transmission_pending = false;
 unsigned long g_transmission_started_at = 0;
 int g_transmission_db_id = -1;
 
-// Whether we have a real Meshtastic link. Set by meshtastic_bridge.cpp
-// once its handshake with the external node completes; drives the
-// status bar's ONLINE/OFFLINE dot. Before the bridge existed this was
-// always false (no way to succeed), and a "testconnect on/off" serial
-// command (main.cpp) could override it for manual QA of the success
-// screen without the UI silently lying about connectivity by default —
-// that command still works, but now overrides a real signal instead of
-// standing in for one that didn't exist yet.
+// Whether we have a real Meshtastic link. Set by main.cpp's setup() once
+// lora_radio_begin() + meshtastic_proto_begin() both succeed (real onboard
+// radio, initialized and listening on the default channel) — drives the
+// status bar's ONLINE/OFFLINE dot. A "testconnect on/off" serial command
+// (main.cpp) can override it for manual QA of the success screen without
+// the UI silently lying about connectivity by default.
 bool g_meshtastic_connected = false;
 
 // --- hold_confirm state (single long-press button, 3s — see

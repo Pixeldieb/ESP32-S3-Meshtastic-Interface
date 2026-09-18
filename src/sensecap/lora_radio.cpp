@@ -127,13 +127,20 @@ bool lora_radio_begin() {
     Serial.println("[LORA] Kein SX1262 auf dem Bus erreichbar, breche ab");
     return false;
   }
-  // EU868 default per org profile (EU868, Klasse A, ADR aktiv) -- ADR/class
-  // don't apply to this raw test, but the frequency does.
+  // Generic bring-up only, arbitrary starting parameters -- SX1262::begin()
+  // just needs *a* valid config to leave the chip in a known, working state.
+  // meshtastic_proto_begin() reconfigures frequency/BW/SF/CR/sync word/
+  // preamble/power to the exact values real Meshtastic firmware uses right
+  // after this, the same two-phase pattern RadioLib's own examples use.
   int16_t state = g_radio.begin(868.0);
   g_ready = (state == RADIOLIB_ERR_NONE);
   Serial.printf("[LORA] begin() -> %d (%s)\n", state, g_ready ? "OK" : "FEHLER");
   return g_ready;
 }
+
+bool lora_radio_ready() { return g_ready; }
+
+SX1262 &lora_radio_instance() { return g_radio; }
 
 bool lora_radio_send_test(const char *text) {
   if (!g_ready) {

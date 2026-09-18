@@ -8,13 +8,11 @@
 // The panel is mounted upside down relative to its natural framebuffer
 // orientation — corrected in lvgl_disp_flush()/touch.cpp, not here.
 //
-// Meshtastic bridge (Weg 2: external node, see ui/README.md) is wired up
-// in meshtastic_bridge.cpp/.h — GPIO22 TX / GPIO23 RX to an external
-// Seeed XIAO nRF52 running stock Meshtastic firmware, same as
-// src/xiao/main.cpp just on different pins (43/44 are this board's own
-// USB-serial console, D6/D7 don't exist on this pinout). lage_db still
-// has the 3 seeded example entries baked in for first boot alongside
-// whatever the bridge writes in for real.
+// Meshtastic: real onboard SX1262 (see lora_radio.h) speaking the actual
+// Meshtastic-protocol-compatible packet format (see meshtastic_proto.h) on
+// the public default primary channel — not a raw/incompatible test signal.
+// lage_db still has the 3 seeded example entries baked in for first boot
+// alongside whatever real mesh traffic writes in.
 // ============================================================================
 
 #include <Arduino.h>
@@ -29,7 +27,7 @@
 
 #include "io_expander.h"
 #include "lora_radio.h"
-#include "meshtastic_bridge.h"
+#include "meshtastic_proto.h"
 #include "touch.h"
 #include "ui_model.h"
 #include "wall_clock.h"
@@ -544,21 +542,23 @@ void setup() {
 #else
   ui_model_build();
 #endif
-  // NOT calling meshtastic_bridge_begin() (external node over UART):
-  // GPIO22-25 are rejected as invalid by uart_set_pin, and GPIO26/27
-  // hang the chip solid (likely SPI flash/PSRAM lines — do NOT probe
-  // that range further while running code from flash). This board's
-  // ESP32-S3 genuinely has no free GPIO left for a 3rd UART once
-  // display+touch+IO-expander+LoRa wiring+console are all accounted
-  // for. Trying the onboard SX1262 directly instead — see lora_radio.h
-  // for what this does and doesn't prove.
-  if (lora_radio_begin()) {
-    lora_radio_send_test("kayna-funkt SenseCAP Testpaket");
+  // Onboard SX1262 (external node over UART is not an option on this
+  // board: GPIO22-25 are rejected as invalid by uart_set_pin, GPIO26/27
+  // hang the chip solid — likely SPI flash/PSRAM lines, do NOT probe that
+  // range further — and the RP2040 co-processor has no hardware path to
+  // the SX1262 either, see src/sensecap/README.md section 5). Real
+  // Meshtastic-protocol framing on top of the radio, see meshtastic_proto.h.
+  if (lora_radio_begin() && meshtastic_proto_begin()) {
+    ui_model_set_connected(true); // real signal: radio initialized and listening
+    Serial.printf("[OK] Meshtastic bereit, Node !%08x\n", (unsigned)meshtastic_proto_my_node_num());
+  } else {
+    Serial.println("[FEHLER] Meshtastic-Radio nicht bereit, bleibe OFFLINE");
   }
   lvgl_last_tick = millis();
   Serial.println("[OK] setup complete");
   Serial.println("Uhrzeit stellen: settime YYYY-MM-DD HH:MM:SS");
-  Serial.println("Nur zum Testen (keine echte Verbindung!): testconnect on|off\n");
+  Serial.println("Testnachricht senden: mesh send <text>");
+  Serial.println("Nur zum Testen (Status-UI ohne echten Zustand): testconnect on|off\n");
 }
 
 void loop() {
@@ -580,6 +580,8 @@ void loop() {
     } else if (line == "testconnect off") {
       ui_model_set_connected(false);
       Serial.println("[TEST] g_meshtastic_connected = false");
+    } else if (line.startsWith("mesh send ")) {
+      meshtastic_proto_send_text(line.substring(10).c_str());
     }
   }
 
@@ -595,7 +597,7 @@ void loop() {
 #else
   ui_model_tick();
 #endif
-  // meshtastic_bridge_loop(); // see the note by meshtastic_bridge_begin() above
+  meshtastic_proto_loop();
   lv_timer_handler();
   delay(10);
 }

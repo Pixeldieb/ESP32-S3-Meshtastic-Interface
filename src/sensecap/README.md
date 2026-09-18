@@ -8,7 +8,7 @@ Build/Flash: `pio run -e sensecap_indicator -t upload`
 
 ---
 
-## 1. Status (Stand 2026-09-17)
+## 1. Status (Stand 2026-09-18)
 
 | Teil | Status |
 |---|---|
@@ -16,7 +16,7 @@ Build/Flash: `pio run -e sensecap_indicator -t upload`
 | Menü/Notfall-Flow (LVGL, `ui_model.cpp`) | ✅ läuft, inkl. Halte-Bestätigung, Sende-/Erfolg/Fehlschlag-Screens |
 | Lagemeldungen in SQLite (`lage_db`, wiederverwendet von der XIAO-Säule) | ✅ läuft |
 | Uhrzeit | ⚠️ nur Build-Zeitpunkt automatisch gesetzt, kein RTC/NTP — `settime YYYY-MM-DD HH:MM:SS` über Serial |
-| Meshtastic-Anbindung | ⚠️ rohes LoRa (SX1262 direkt) sendet/läuft jetzt — aber noch **kein** Meshtastic-Protokoll (Verschlüsselung/Routing/Kanäle fehlen). Siehe [Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/36) |
+| Meshtastic-Anbindung | ✅ **echtes Meshtastic-Protokoll** über den eingebauten SX1262 (Weg 1) — Paketheader, AES128-CTR-Verschlüsselung, Protobuf-Payload, Kanal-Hash, exakte Funkparameter, alles gegen den echten Firmware-Quellcode verifiziert (siehe Abschnitt 5). Sende- und Empfangspfad laufen; noch nicht gegen ein zweites echtes Meshtastic-Gerät getestet (keins zur Hand in dieser Session) |
 | Standby-Screen, Alarm-Blinken, Batterie/Solar/Netz-Symbol | ❌ noch nicht begonnen |
 | Lokaler Betreiber / Onboarding | ⚠️ nur Datenstruktur (`station_config.h`), noch keine Eingabe-UI |
 
@@ -79,11 +79,12 @@ vier Punkte oben der Reihe nach neu verifizieren.
   künftiges Onboarding (noch keine Eingabe-UI).
 - `wall_clock.h/.cpp` — echte Uhrzeit (kein RTC, wird beim Flashen aus der Build-Zeit
   gesetzt, sonst per `settime`).
-- `meshtastic_bridge.h/.cpp` — externe-Node-Anbindung (Weg 2), **endgültig verworfen**
-  (kein freier GPIO, RP2040 hat keine Hardware-Verbindung zum SX1262 — siehe unten).
-- `lora_radio.h/.cpp` — Onboard-SX1262 direkt (Weg 1), **funktioniert** (SPI/Reset-Timing-
-  Fix, siehe unten), aber weiterhin **nicht Meshtastic-protokoll-kompatibel** — nur rohes
-  LoRa senden/empfangen.
+- `lora_radio.h/.cpp` — Hardware-Bring-up des eingebauten SX1262 (Reset-Timing-Fix,
+  RadioLibHal über den IO-Expander). Kennt nur den Chip, keine Meshtastic-Semantik.
+- `meshtastic_proto.h/.cpp` — die eigentliche Meshtastic-Protokollschicht: Paketheader,
+  AES128-CTR-Verschlüsselung, Protobuf-Encode/Decode, Kanal-Hash, Sende-/Empfangspfad.
+  Siehe Abschnitt 5. (`meshtastic_bridge.h/.cpp`, die externe-Node-Anbindung "Weg 2",
+  wurde entfernt — siehe Abschnitt 5, warum das endgültig keine Option auf diesem Board ist.)
 
 ---
 
@@ -97,39 +98,86 @@ RELEASED-Events, kein eigenes Touch-Polling mehr nötig).
 
 ---
 
-## 5. Meshtastic-Anbindung — der offene Punkt
+## 5. Meshtastic-Anbindung
 
 Siehe **[Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/36)**
-für den vollen Stand. Kurzfassung (Stand 2026-09-17, Update autonome Session):
+für den vollen Verlauf. Kurzfassung, Stand 2026-09-18 (autonome Nachtsession):
 
-- **Weg 1 (eingebautes SX1262 direkt, `lora_radio.cpp`): CHIP_NOT_FOUND gelöst.**
-  Realer Schaltplan zum Board gefunden (öffentliches Referenzprojekt
-  [ril3y/sensecap-indicator-d1l](https://github.com/ril3y/sensecap-indicator-d1l),
-  `SENSECAP_INDICATOR_PINOUT_SCHEMATIC.md`) — bestätigt unsere IO-Expander-Pinbelegung
-  (NSS=IO0, RST=IO1, BUSY=IO2, DIO1=IO3) exakt. Ursache für `CHIP_NOT_FOUND` war nicht
-  die vermutete BUSY-über-I2C-Geschwindigkeit, sondern fehlende Settle-Zeit:
-  `SX126x::reset()` pulst RST und hämmert danach *ohne jede Wartezeit* sofort
-  `standby()` über SPI — auf echter Hardware antwortet der Chip da noch nicht
-  zuverlässig. Per `RADIOLIB_DEBUG_SPI` bestätigt: alle `GET_STATUS`-Antworten während
-  der 10x-Retry-Schleife kamen als `0x00 0x00` zurück (siehe `RADIOLIB_SX126X_REG_VERSION_STRING`-Dump).
-  Fix in `lora_radio_wake_chip()`: eigener Reset + 20ms Settle-Zeit + ein rohes
-  `GET_STATUS` als Lebenszeichen-Check, **bevor** RadioLib übernimmt. Danach: über
-  drei Power-Cycles reproduzierbar `SX1262::begin() -> 0 (OK)` und
-  `transmit() -> 0 (OK)`.
-- **Weg 2 (externe Node über UART) endgültig verworfen, nicht nur wegen GPIO-Mangel:**
-  Der Schaltplan zeigt außerdem, dass der RP2040-Co-Prozessor **keine** Hardware-Verbindung
-  zum SX1262 hat — er ist ein reiner Sensor-Co-Prozessor (AHT20/SGP40/SCD41/SD-Karte/Buzzer)
-  über ein fest verdrahtetes COBS-Binärprotokoll. Die früher angedachte "RP2040 als Relay"-
-  Ausweichoption ist damit hinfällig (unabhängig davon, dass Weg 1 jetzt sowieso funktioniert).
-- **Neuer, jetzt eigentlicher offener Punkt:** Rohes LoRa-Senden/Empfangen über den SX1262
-  funktioniert, ist aber **kein** Meshtastic — kein kompatibles Paketformat, keine
-  Verschlüsselung, kein Routing/Kanal-Handling. Echte Mesh-Kompatibilität bräuchte entweder
-  (a) eine Nachbildung des Meshtastic-Protokolls auf Basis dieser rohen Funkverbindung
-  (eigenständiger, nicht-trivialer Umfang), oder (b) eine bewusste Entscheidung, dass
-  kayna-funkt-Geräte vorerst nur *untereinander* über ein eigenes, einfacheres Protokoll
-  sprechen statt dem öffentlichen Meshtastic-Mesh beizutreten. Das ist eine strategische
-  Scope-Frage, keine rein technische — sollte der Nutzer entscheiden, bevor daran
-  weitergebaut wird.
+### 5.1 CHIP_NOT_FOUND gelöst (Weg 1, `lora_radio.cpp`)
+
+Realer Schaltplan zum Board gefunden (öffentliches Referenzprojekt
+[ril3y/sensecap-indicator-d1l](https://github.com/ril3y/sensecap-indicator-d1l),
+`SENSECAP_INDICATOR_PINOUT_SCHEMATIC.md`) — bestätigt unsere IO-Expander-Pinbelegung
+(NSS=IO0, RST=IO1, BUSY=IO2, DIO1=IO3) exakt. Ursache für `CHIP_NOT_FOUND` war nicht
+die vermutete BUSY-über-I2C-Geschwindigkeit, sondern fehlende Settle-Zeit:
+`SX126x::reset()` pulst RST und hämmert danach *ohne jede Wartezeit* sofort `standby()`
+über SPI. Fix in `lora_radio_wake_chip()`: eigener Reset + 20ms Settle-Zeit + ein rohes
+`GET_STATUS` als Lebenszeichen-Check, **bevor** RadioLib übernimmt.
+
+Der Schaltplan zeigt außerdem: der RP2040-Co-Prozessor hat **keine** Hardware-Verbindung
+zum SX1262 (reiner Sensor-Co-Prozessor über ein festes COBS-Binärprotokoll) — die früher
+angedachte "RP2040 als Relay"-Ausweichoption für Weg 2 ist damit hinfällig, und Weg 2
+(externe Node über UART) bleibt aus GPIO-Mangel verworfen. `meshtastic_bridge.h/.cpp`
+wurde entfernt.
+
+### 5.2 Echtes Meshtastic-Protokoll (nicht nur rohes LoRa)
+
+`meshtastic_proto.h/.cpp` implementiert das tatsächliche Meshtastic-Wire-Format auf dem
+öffentlichen Default-Primärkanal ("LongFast", Standard-PSK) — kein eigenes/inkompatibles
+Format. Jede Konstante ist direkt aus `meshtastic/firmware`s eigenem Quellcode gelesen
+(nicht aus dem Gedächtnis rekonstruiert):
+
+| Was | Wert | Quelle |
+|---|---|---|
+| Paketheader (16 Byte: to/from/id/flags/channel/next_hop/relay_node) | exakter Byte-Layout | `RadioInterface.h` (`PacketHeader`) |
+| Verschlüsselung | AES128-CTR, Nonce = 8B PacketID (LE) + 4B NodeNum (LE) + 4B Zähler | `CryptoEngine.cpp/.h` |
+| Default-Kanal-PSK | `d4 f1 bb 3a 20 29 07 59 f0 bc ff ab cf 4e 69 01` (öffentlich, kein Geheimnis) | `Channels.h` (`defaultpsk`) |
+| Kanal-Hash | `xorHash("LongFast") ^ xorHash(psk)` | `Channels.cpp` (`generateHash`) |
+| Payload | Protobuf-`Data`-Message (Portnum + Bytes) | `mesh.pb.h`, vendored in `lib/meshtastic_proto/` |
+| Frequenz (Region EU_868 + Preset LONG_FAST) | **869.525 MHz**, genau ein Kanal-Slot (kein Hopping — `numChannels = floor(0.25/0.25) = 1`) | `RadioInterface.cpp` (`applyModemConfig`, `regions[]`) |
+| BW/SF/CR/Sync/Präambel | 250kHz / SF11 / 4:5 / `0x2b` / 16 Symbole | `MeshRadio.h`, `RadioLibInterface.h`, `RadioInterface.h` |
+
+Protobuf: nicht händisch kodiert, sondern nanopb 0.4.9.1 + Meshtastics eigene generierte
+`.pb.h/.cpp` vendored in `lib/meshtastic_proto/` (siehe dessen README für Provenienz) —
+das eliminiert praktisch jedes Risiko eines Feldnummern-/Wire-Type-Fehlers.
+
+**Verifiziert, nicht nur behauptet** (Ehrlichkeits-Grundsatz dieses Projekts): das eigene
+Gerät hat sein eigenes gesendetes Paket per HF-Selbstkopplung empfangen und korrekt
+entschlüsselt/dekodiert (voller Roundtrip: Encode → Verschlüsseln → Senden → Empfangen →
+Entschlüsseln → Decode). Zusätzlich wurden Klartext- und Chiffretext-Bytes eines echten
+gesendeten Pakets abgegriffen und **unabhängig** in Python (pycryptodome, komplett andere
+Implementierung als das on-device mbedtls) nachgerechnet — Ergebnis war byte-identisch.
+Das bestätigt AES-CTR-Nonce-Konstruktion und Protobuf-Encoding gegen eine zweite,
+unabhängige Implementierung. **Nicht verifiziert:** Empfang/Versand gegen ein zweites
+echtes Meshtastic-Gerät (App oder Node) — keins in dieser Session zur Hand. Das ist der
+eigentliche Test für morgen früh.
+
+### 5.3 Was zum Testen bereitsteht
+
+- Serial-Kommando `mesh send <text>` — sendet eine echte Meshtastic-Textnachricht auf
+  dem Default-Kanal. Mit der offiziellen Meshtastic-App (oder einem echten Node) auf
+  EU868 + LongFast-Preset (Werkseinstellung) sollte das ankommen.
+- Der Notfall-Bestätigungs-Flow (`ui_model.cpp` → `meshtastic_send_emergency()`) sendet
+  jetzt echte Meshtastic-Textnachrichten im bekannten `LAGE:...`-Format statt der alten
+  UART-Bridge.
+- Empfang läuft mit: eingehende Textnachrichten (auch von echten Fremdgeräten auf
+  demselben Kanal) werden dekodiert, geloggt, und `LAGE:`-formatierte Nachrichten in
+  `lage_db` übernommen (`ui_model_notify_rx()` für die Statusleiste).
+- ONLINE/OFFLINE in der Statusleiste zeigt jetzt einen echten Zustand: `true` sobald
+  `lora_radio_begin()` **und** `meshtastic_proto_begin()` beim Boot erfolgreich waren.
+
+### 5.4 Bewusst nicht gemacht
+
+- Kein Routing/Rebroadcast (Store-and-Forward über mehrere Hops) — wir senden/empfangen
+  nur direkt, wie ein einfacher Leaf-Node.
+  Kein DIO1-Hardware-Interrupt (der Pin hängt am IO-Expander, nicht an einem echten
+  ESP32-GPIO) — `meshtastic_proto_loop()` pollt stattdessen `getIrqStatus()` per SPI
+  jede `loop()`-Iteration, unkritisch für die Latenz dieses Projekts.
+- Kein PKI/Direktnachrichten (Curve25519), keine Zusatzkanäle — nur der öffentliche
+  Default-Kanal.
+- Node-Nummer wird aus der ESP32-MAC abgeleitet, nicht mit Meshtastics eigenem Algorithmus
+  nachgebildet — für die Protokoll-Kompatibilität irrelevant (jede stabile, von 0 und
+  Broadcast verschiedene 32-Bit-Zahl funktioniert).
 
 ---
 
@@ -138,10 +186,10 @@ für den vollen Stand. Kurzfassung (Stand 2026-09-17, Update autonome Session):
 - Info-Historie/Lageinformationen zeigen `lage_db`-Einträge inkl. 3 Beispieleinträgen,
   die beim ersten Boot einmalig geseedet werden (SPIFFS persistiert, kein erneutes
   Seeden bei jedem Boot).
-- Status-Leiste: TX/RX-Punkte sind verdrahtet, blinken aber erst bei echtem Funkverkehr
-  (`ui_model_notify_tx/rx`). ONLINE/OFFLINE hängt an `ui_model_set_connected`, aktuell
-  fest `false` (keine Bridge aktiv). `testconnect on|off` über Serial überschreibt das
-  nur zu Testzwecken — keine echte Verbindung.
+- Status-Leiste: TX/RX-Punkte sind verdrahtet und blinken bei echtem Funkverkehr
+  (`ui_model_notify_tx/rx`). ONLINE/OFFLINE hängt an `ui_model_set_connected`, gesetzt
+  in `main.cpp` sobald Radio+Protokoll beim Boot erfolgreich starten (siehe Abschnitt 5).
+  `testconnect on|off` über Serial kann das zu Testzwecken übersteuern.
 - `do_trigger_emergency` speichert die Meldung immer in `lage_db` (Status wandert
   „wird übermittelt" → „übermittelt"/„fehlgeschlagen") — unabhängig davon, ob wirklich
   etwas gesendet wurde.
