@@ -28,6 +28,7 @@
 
 #include "io_expander.h"
 #include "lage_db.h"
+#include "mesh_security.h"
 #include "lora_radio.h"
 #include "meshtastic_proto.h"
 #include "station_config.h"
@@ -560,6 +561,12 @@ void setup() {
     return (unsigned long)t;
   });
 
+  // Issues #1 (Allowlist) / #3 (Ratenlimit): eingehende Lagemeldungen wurden
+  // bisher von jedem Absender ungeprueft uebernommen. Sicherer Default: eine
+  // leere Allowlist verwirft ALLE eingehenden Lagemeldungen, bis mindestens
+  // ein Absender per "allow add <hex-node-id>" freigeschaltet wurde.
+  meshSecurityInit();
+
 #if UI_MINIMAL_TEST
   build_minimal_ui();
   Serial.printf("[OK] MINIMAL TEST level %d\n", MINIMAL_LEVEL);
@@ -583,6 +590,7 @@ void setup() {
   Serial.println("Uhrzeit stellen: settime YYYY-MM-DD HH:MM:SS");
   Serial.println("Testnachricht senden: mesh send <text>");
   Serial.println("Leitstelle fuer Notmeldungen festlegen: dispatch set <hex-node-id, z.B. ce0ffa28>");
+  Serial.println("Absender-Allowlist verwalten: allow add|revoke <hex-node-id>, allow list");
   Serial.println("Nur zum Testen (Status-UI ohne echten Zustand): testconnect on|off\n");
 }
 
@@ -618,6 +626,17 @@ void loop() {
       bool ok = meshtastic_send_emergency("fire_department", "test", "Serial-Testmeldung");
       Serial.printf("[TEST] meshtastic_send_emergency() -> %s (radio lokal), warte bis zu 8s auf ACK...\n",
                     ok ? "OK" : "FEHLER");
+    } else if (line.startsWith("allow add ")) {
+      uint32_t nodeNum = strtoul(line.substring(10).c_str(), nullptr, 16);
+      if (meshSecurityAllow(nodeNum)) {
+        Serial.printf("[SECURITY] !%08x freigeschaltet.\n", (unsigned)nodeNum);
+      }
+    } else if (line.startsWith("allow revoke ")) {
+      uint32_t nodeNum = strtoul(line.substring(13).c_str(), nullptr, 16);
+      Serial.printf("[SECURITY] !%08x %s.\n", (unsigned)nodeNum,
+                    meshSecurityRevoke(nodeNum) ? "entfernt" : "war nicht auf der Allowlist");
+    } else if (line == "allow list") {
+      meshSecurityListAllowed();
     }
   }
 

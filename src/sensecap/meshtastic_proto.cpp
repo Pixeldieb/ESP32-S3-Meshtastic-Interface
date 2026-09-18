@@ -9,6 +9,7 @@
 
 #include "lage_db.h"
 #include "lora_radio.h"
+#include "mesh_security.h"
 #include "meshtastic/mesh.pb.h"
 #include "station_config.h"
 #include "ui_model.h"
@@ -317,11 +318,14 @@ void handleTextMessage(uint32_t from, const char *text) {
   String status = payload.substring(p2 + 1, p3); status.trim();
   String content = payload.substring(p3 + 1); content.trim();
 
+  bool isNew = idPart.equalsIgnoreCase("NEU");
+  if (!meshSecurityCheck(from, isNew)) return; // Issues #1 (Allowlist) / #3 (Ratenlimit)
+
   char fromBuf[12];
   snprintf(fromBuf, sizeof(fromBuf), "!%08x", (unsigned)from);
   String fromNodeStr(fromBuf);
 
-  if (idPart.equalsIgnoreCase("NEU")) {
+  if (isNew) {
     int id = lageDbCreate(kategorie, status, content, fromNodeStr);
     Serial.printf("[MESH] Neue Lagemeldung angelegt, ID %d\n", id);
   } else {
