@@ -17,6 +17,8 @@ Build/Flash: `pio run -e sensecap_indicator -t upload`
 | Lagemeldungen in SQLite (`lage_db`, wiederverwendet von der XIAO-Säule) | ✅ läuft (Init-Bug am 2026-09-18 gefunden und gefixt, siehe Abschnitt 5) |
 | Uhrzeit | ⚠️ nur Build-Zeitpunkt automatisch gesetzt, kein RTC/NTP — `settime YYYY-MM-DD HH:MM:SS` über Serial |
 | Meshtastic-Anbindung | ✅ **echtes Meshtastic-Protokoll**, live gegen ein reales Gerät verifiziert: Broadcast bidirektional, Direktnachricht mit echter Zustellbestätigung (ROUTING_APP-ACK) an eine konfigurierbare, persistente Leitstelle. Details siehe Abschnitt 5. |
+| Absender-Allowlist / Ratenbegrenzung (Issues #1, #3) | ✅ eingebaut (`src/common/mesh_security.h`) — sicherer Default: leere Allowlist verwirft alle eingehenden Lagemeldungen, `allow add <hex-node-id>` zum Freischalten |
+| Heartbeat an Leitstelle (Issue #13) | ✅ periodischer Status-Broadcast (alle 2 Min.), ehrlich ohne Akku-/Sabotage-Werte (keine Sensorik vorhanden) |
 | Standby-Screen, Alarm-Blinken, Batterie/Solar/Netz-Symbol | ❌ noch nicht begonnen |
 | Lokaler Betreiber / Onboarding | ⚠️ nur Datenstruktur (`station_config.h`), Leitstellen-Node-Nummer per Serial-Kommando setzbar (persistent in NVS), noch keine Eingabe-UI |
 

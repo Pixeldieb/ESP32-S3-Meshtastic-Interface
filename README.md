@@ -311,6 +311,16 @@ und in [Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/is
   Nebenbei einen unabhängigen, bis dahin unbemerkten Bug gefunden: `lageDbBegin()`
   fehlte auf diesem Board komplett, die Notmeldungshistorie lief seit Board-Einführung
   ins Leere. Details im [Wiki](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/wiki/SenseCAP-Meshtastic).
+- **Sicherheitslücken aus der Codebase-Analyse geschlossen** ([#1](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/1),
+  [#3](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/3)): eingehende
+  Lagemeldungen (und auf dem XIAO-Board die Zustands-Kurzcodes) wurden von jedem
+  Absender ungeprüft übernommen. Neues gemeinsames Modul `src/common/mesh_security.h`
+  mit Absender-Allowlist (sicherer Default: leer = alles verwerfen, nicht alles
+  erlauben) und Ratenbegrenzung, in beide Boards eingebaut.
+- **Heartbeat-Telemetrie** ([#13](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/13)):
+  SenseCAP-Board sendet periodisch einen Status-Broadcast, damit eine Leitstelle
+  eine ausgefallene Station am ausbleibenden Lebenszeichen erkennt — ehrlich ohne
+  Akku-/Sabotage-Werte, da dafür noch keine Sensorik existiert.
 
 ### 2026-09-17
 
