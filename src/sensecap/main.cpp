@@ -28,6 +28,7 @@
 #include "io_expander.h"
 #include "lora_radio.h"
 #include "meshtastic_proto.h"
+#include "station_config.h"
 #include "touch.h"
 #include "ui_model.h"
 #include "wall_clock.h"
@@ -558,6 +559,7 @@ void setup() {
   Serial.println("[OK] setup complete");
   Serial.println("Uhrzeit stellen: settime YYYY-MM-DD HH:MM:SS");
   Serial.println("Testnachricht senden: mesh send <text>");
+  Serial.println("Leitstelle fuer Notmeldungen festlegen: dispatch set <hex-node-id, z.B. ce0ffa28>");
   Serial.println("Nur zum Testen (Status-UI ohne echten Zustand): testconnect on|off\n");
 }
 
@@ -582,6 +584,17 @@ void loop() {
       Serial.println("[TEST] g_meshtastic_connected = false");
     } else if (line.startsWith("mesh send ")) {
       meshtastic_proto_send_text(line.substring(10).c_str());
+    } else if (line.startsWith("dispatch set ")) {
+      uint32_t nodeNum = strtoul(line.substring(13).c_str(), nullptr, 16);
+      station_config().dispatchNodeNum = nodeNum;
+      Serial.printf("[OK] Leitstelle fuer Notmeldungen gesetzt: !%08x\n", (unsigned)nodeNum);
+    } else if (line == "test emergency") {
+      // Exercises the exact same path as the touchscreen hold-confirm
+      // (direct message + ACK request on the private channel), without
+      // needing to physically touch the screen. Diagnostic only.
+      bool ok = meshtastic_send_emergency("fire_department", "test", "Serial-Testmeldung");
+      Serial.printf("[TEST] meshtastic_send_emergency() -> %s (radio lokal), warte bis zu 8s auf ACK...\n",
+                    ok ? "OK" : "FEHLER");
     }
   }
 

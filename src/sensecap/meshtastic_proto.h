@@ -9,15 +9,21 @@
 // factory-default Meshtastic app or node on the same region+preset can
 // receive and decode what we send, and we can decode what they send.
 //
-// Scope (deliberately, for now): the public default primary channel only
-// ("LongFast" name, default PSK) -- the channel every stock Meshtastic
-// device listens on before any custom channel config. Region is fixed to
-// EU_868 per org policy (see CLAUDE org instructions), which for the
-// LONG_FAST preset has exactly one possible frequency slot (869.525 MHz --
-// verified against meshtastic/firmware's own RadioInterface.cpp formula,
-// see meshtastic_proto.cpp's comments). No custom channels, no PKI/DM
-// encryption, no routing/rebroadcast -- we originate and receive on the
-// primary channel only, like a simple leaf node.
+// Two channels (see meshtastic_proto.cpp for the exact PSKs/hashes):
+// - The public default primary channel ("LongFast" name, default PSK) --
+//   used for NodeInfo exchange, generic ACK replies, and the `mesh send`
+//   test command. Keeps this board discoverable by any stock Meshtastic
+//   device without extra config.
+// - A private "kayna-funkt" channel (short-key preset for now, see
+//   meshtastic_send_emergency()) -- emergency reports go out here as a
+//   direct message to a configured dispatch node, not a broadcast.
+//
+// Region is fixed to EU_868 per org policy (see CLAUDE org instructions),
+// which for the LONG_FAST preset has exactly one possible frequency slot
+// (869.525 MHz -- verified against meshtastic/firmware's own
+// RadioInterface.cpp formula, see meshtastic_proto.cpp's comments). No
+// PKI/DM encryption, no routing/rebroadcast -- we originate and receive
+// like a simple leaf node, just on two channels instead of one.
 //
 // See lib/meshtastic_proto/README.md for where the protobuf definitions
 // (vendored, not hand-written) come from.
@@ -38,7 +44,19 @@ bool meshtastic_proto_send_text(const char *text);
 
 // Formats and sends an emergency report using the same LAGE: wire format
 // src/xiao/main.cpp parses (see main README "Lagemeldungen (kayna-funkt)").
+// Sent as a direct message (with a real ACK request) to
+// station_config().dispatchNodeNum on the private channel -- returns false
+// immediately, without transmitting anything, if that's not configured
+// (0). The return value is only whether the radio locally accepted the
+// send; call meshtastic_proto_emergency_ack_received() afterwards (poll it
+// from ui_model_tick, it can take a few seconds) to find out whether the
+// dispatch node actually confirmed receipt.
 bool meshtastic_send_emergency(const char *category, const char *type, const char *label);
+
+// True once a real ROUTING_APP delivery ACK came back from the dispatch
+// node for the most recent meshtastic_send_emergency() call. Resets to
+// false at the start of each new meshtastic_send_emergency() call.
+bool meshtastic_proto_emergency_ack_received();
 
 // Our own node number (derived from the ESP32's factory MAC, like real
 // Meshtastic firmware does) -- logged at startup, useful for identifying

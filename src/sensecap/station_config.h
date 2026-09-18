@@ -11,6 +11,14 @@ struct StationConfig {
   String stationId;
   String operatorName;  // "lokaler Betreiber"
   String localContact;  // who/what to call if a transmission keeps failing
+
+  // Meshtastic node number of the "Leitstelle" (dispatch) that emergency
+  // reports are sent to as a direct message (so we can get a real
+  // delivery ACK -- Meshtastic never acks broadcasts, see
+  // meshtastic_proto.cpp). 0 = not configured yet; set via the
+  // "dispatch set <hex-node-id>" serial command until there's a real
+  // onboarding UI for it.
+  uint32_t dispatchNodeNum = 0;
 };
 
 // Single shared instance. A later onboarding flow would load/save this

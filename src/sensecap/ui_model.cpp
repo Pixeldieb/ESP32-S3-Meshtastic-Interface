@@ -78,10 +78,17 @@ EmergencyChoice g_selected{};
 
 // --- emergency_transmission state ---
 // meshtastic_proto.cpp's meshtastic_send_emergency() call is real and
-// synchronous (see start_transmission) — this delay only exists so
-// "senden..." is visible for a moment before showing the real outcome
-// (g_last_send_ok), instead of flashing past instantly.
-const unsigned long TRANSMISSION_SIMULATE_MS = 2000;
+// synchronous (see start_transmission) and only tells us the radio locally
+// accepted the send. Genuine delivery confirmation is a real ACK from the
+// dispatch node, which can take a few seconds to come back over the air --
+// see ui_model_tick()'s handling of g_transmission_pending, which now waits
+// up to EMERGENCY_ACK_TIMEOUT_MS for meshtastic_proto_emergency_ack_received()
+// instead of always finishing after a fixed delay. If the local send itself
+// already failed (no point waiting for an ACK that was never requested),
+// TRANSMISSION_LOCAL_FAIL_DELAY_MS is used instead -- just long enough for
+// "senden..." to be visible before showing the failure, like before.
+const unsigned long TRANSMISSION_LOCAL_FAIL_DELAY_MS = 2000;
+const unsigned long EMERGENCY_ACK_TIMEOUT_MS = 8000;
 bool g_transmission_pending = false;
 unsigned long g_transmission_started_at = 0;
 int g_transmission_db_id = -1;
@@ -310,10 +317,10 @@ String format_timestamp() {
   return String(buf);
 }
 
-// Set by the real meshtastic_send_emergency() call in start_transmission,
-// used once TRANSMISSION_SIMULATE_MS has passed (see ui_model_tick). The
-// send itself is real and immediate; the delay is just so "senden..."
-// is visible for a moment instead of flashing past.
+// Set by the real meshtastic_send_emergency() call in start_transmission:
+// whether the radio locally accepted the send, NOT whether the dispatch
+// node actually received it. See ui_model_tick()'s handling of
+// g_transmission_pending for how the real ACK wait works.
 bool g_last_send_ok = false;
 
 void start_transmission(const char *sending_verb) {
@@ -876,13 +883,31 @@ void ui_model_tick() {
   // RELEASED events on the single confirm button (confirm_btn_press_cb)
   // — no per-tick polling needed here anymore.
 
-  // The actual mt_send_text() call already happened (in
-  // start_transmission, via meshtastic_bridge.cpp) — this delay just
-  // keeps "senden..." visible for a moment before showing its real
-  // outcome, g_last_send_ok.
-  if (g_transmission_pending && now - g_transmission_started_at >= TRANSMISSION_SIMULATE_MS) {
-    g_transmission_pending = false;
-    finish_transmission(g_last_send_ok);
+  // The actual meshtastic_send_emergency() call already happened (in
+  // start_transmission, via meshtastic_proto.cpp). What happens next
+  // depends on whether the radio even accepted the send locally:
+  if (g_transmission_pending) {
+    unsigned long elapsed = now - g_transmission_started_at;
+    if (!g_last_send_ok) {
+      // Local send already failed (no dispatch configured, radio error) --
+      // nothing to wait for. Same short delay as before just so
+      // "senden..." doesn't flash past instantly.
+      if (elapsed >= TRANSMISSION_LOCAL_FAIL_DELAY_MS) {
+        g_transmission_pending = false;
+        finish_transmission(false);
+      }
+    } else if (meshtastic_proto_emergency_ack_received()) {
+      // A real ROUTING_APP ACK came back from the dispatch node -- genuine
+      // delivery confirmation, finish as soon as it arrives.
+      g_transmission_pending = false;
+      finish_transmission(true);
+    } else if (elapsed >= EMERGENCY_ACK_TIMEOUT_MS) {
+      // Radio sent it, but nobody confirmed receipt in time. Report as
+      // failure -- we genuinely don't know if it arrived, and this screen
+      // must never claim success without real confirmation.
+      g_transmission_pending = false;
+      finish_transmission(false);
+    }
   }
 }
 

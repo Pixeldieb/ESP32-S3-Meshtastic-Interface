@@ -10,6 +10,7 @@
 #include "lage_db.h"
 #include "lora_radio.h"
 #include "meshtastic/mesh.pb.h"
+#include "station_config.h"
 #include "ui_model.h"
 
 // Every constant below is copied from meshtastic/firmware's own source
@@ -51,11 +52,44 @@ constexpr size_t kMaxPayload = 233; // meshtastic_Data_payload_t = PB_BYTES_ARRA
 const uint8_t kDefaultPsk[16] = {0xd4, 0xf1, 0xbb, 0x3a, 0x20, 0x29, 0x07, 0x59,
                                   0xf0, 0xbc, 0xff, 0xab, 0xcf, 0x4e, 0x69, 0x01};
 
-// The default (unnamed) primary channel's name for hashing purposes is the
-// modem preset's display name (Channels::getName() falls back to this when
-// the stored name is empty) -- DisplayFormatters::getModemPresetDisplayName
-// returns "LongFast" for LONG_FAST.
-const char *kChannelName = "LongFast";
+// Two channels, both reachable on the same frequency (only the PSK/hash
+// differ -- see defaultChannelFrequencyMHz()'s comment: region+preset fixes
+// the frequency regardless of channel name/key, exactly how real Meshtastic
+// lets one radio serve several channels at once).
+//
+// - Public: the default (unnamed) primary channel every stock Meshtastic
+//   device powers up on. Name for hashing purposes is the modem preset's
+//   display name (Channels::getName() falls back to this when the stored
+//   name is empty) -- "LongFast" for LONG_FAST. Used for NodeInfo exchange,
+//   generic ACK replies, and the `mesh send` test command -- keeps this
+//   board discoverable/testable without needing kayna-funkt-specific config.
+// - Private ("kayna-funkt"): a short-PSK channel per the user's explicit
+//   2026-09-18 decision (real device testing found "failed to deliver to
+//   mesh" on the public channel's broadcasts -- Meshtastic never ACKs
+//   broadcasts by design; emergency reports need a direct message on a
+//   dedicated channel instead). Short PSK now for easy onboarding
+//   ("kurzer Schluessel"); a real random per-deployment key is a planned
+//   follow-up, not implemented yet.
+struct MeshChannel {
+  const char *name;
+  uint8_t psk[16];
+  uint8_t hash; // computed once in meshtastic_proto_begin()
+};
+
+// Channels::getKey(): a 1-byte PSK is a "short" preset index into
+// defaultpsk, bumping only the last byte (index 1 = defaultpsk unchanged).
+// This is NOT a real secret -- same category as the public PSK, just a
+// different, less commonly used index. Fine for now per the user's explicit
+// "short key for easier login, real secret channel later" decision.
+constexpr uint8_t kPrivateChannelPskIndex = 5;
+
+MeshChannel g_publicChannel = {"LongFast", {0xd4, 0xf1, 0xbb, 0x3a, 0x20, 0x29, 0x07, 0x59, 0xf0, 0xbc, 0xff, 0xab, 0xcf, 0x4e,
+                                            0x69, 0x01},
+                               0};
+MeshChannel g_privateChannel = {"kayna-funkt", {0xd4, 0xf1, 0xbb, 0x3a, 0x20, 0x29, 0x07, 0x59, 0xf0, 0xbc, 0xff, 0xab, 0xcf,
+                                                0x4e, 0x69,
+                                                (uint8_t)(0x01 + (kPrivateChannelPskIndex - 1))},
+                                0};
 
 // EU_868 region (RadioInterface.cpp regions[] table).
 constexpr float kRegionFreqStartMHz = 869.4f;
@@ -83,14 +117,28 @@ uint8_t xorHash(const uint8_t *p, size_t len) {
 float defaultChannelFrequencyMHz() { return kRegionFreqStartMHz + (kBandwidthKHz / 2000.0f); }
 
 // Channels::generateHash(): xorHash(channel name) ^ xorHash(psk bytes).
-uint8_t defaultChannelHash() {
-  uint8_t h = xorHash(reinterpret_cast<const uint8_t *>(kChannelName), strlen(kChannelName));
-  h ^= xorHash(kDefaultPsk, sizeof(kDefaultPsk));
+uint8_t channelHash(const MeshChannel &ch) {
+  uint8_t h = xorHash(reinterpret_cast<const uint8_t *>(ch.name), strlen(ch.name));
+  h ^= xorHash(ch.psk, sizeof(ch.psk));
   return h;
+}
+
+// Which configured channel (if any) a received packet's channel-hash byte
+// belongs to -- nullptr if it matches neither (Channels::decryptForHash():
+// unrecognized hash means "not for us", not an error).
+const MeshChannel *findChannelByHash(uint8_t hash) {
+  if (hash == g_publicChannel.hash) return &g_publicChannel;
+  if (hash == g_privateChannel.hash) return &g_privateChannel;
+  return nullptr;
 }
 
 uint32_t g_myNodeNum = 0;
 bool g_started = false;
+
+// Tracks the most recent emergency send awaiting a real delivery ACK from
+// the dispatch node (see meshtastic_send_emergency()). 0 = none pending.
+uint32_t g_pendingEmergencyPacketId = 0;
+bool g_emergencyAckReceived = false;
 
 // CryptoEngine::encryptAESCtr/initNonce: nonce = 8 bytes packet ID (LE) + 4
 // bytes sending node number (LE) + 4 byte block counter starting at 0. CTR
@@ -100,7 +148,7 @@ bool g_started = false;
 // single big-endian counter, but for any one packet here (well under 240
 // bytes = 15 AES blocks) that's indistinguishable from "only the last 4
 // bytes are the counter" -- it never carries into byte 11.
-void aesCtrCrypt(uint32_t fromNode, uint32_t packetId, uint8_t *data, size_t len) {
+void aesCtrCrypt(const uint8_t psk[16], uint32_t fromNode, uint32_t packetId, uint8_t *data, size_t len) {
   uint8_t nonce[16] = {0};
   uint64_t packetId64 = packetId; // upper 32 bits zero: our packet IDs are 32-bit
   memcpy(nonce, &packetId64, sizeof(uint64_t));
@@ -108,7 +156,7 @@ void aesCtrCrypt(uint32_t fromNode, uint32_t packetId, uint8_t *data, size_t len
 
   mbedtls_aes_context aes;
   mbedtls_aes_init(&aes);
-  mbedtls_aes_setkey_enc(&aes, kDefaultPsk, 128); // CTR always uses the encrypt key schedule
+  mbedtls_aes_setkey_enc(&aes, psk, 128); // CTR always uses the encrypt key schedule
   size_t ncOff = 0;
   uint8_t streamBlock[16] = {0};
   mbedtls_aes_crypt_ctr(&aes, len, &ncOff, nonce, streamBlock, data, data);
@@ -131,11 +179,17 @@ uint32_t deriveNodeNum() {
 // zero hops means "don't relay this, it's only meant for whoever's in
 // direct radio range", appropriate for an ACK responding to a packet we
 // just received directly. Normal originated traffic uses kHopLimitDefault.
-bool sendData(uint32_t toNode, const meshtastic_Data &data, uint8_t hopLimit = kHopLimitDefault) {
+// wantAck is force-cleared for broadcasts, matching Router.cpp's own
+// "Never set the want_ack flag on broadcast packets". outPacketId (if
+// non-null) receives the randomly generated packet ID, so callers that
+// need to later match an incoming ACK's request_id against this send can.
+bool sendData(uint32_t toNode, const meshtastic_Data &data, const MeshChannel &channel, uint8_t hopLimit = kHopLimitDefault,
+              bool wantAck = false, uint32_t *outPacketId = nullptr) {
   if (!g_started) {
     Serial.println("[MESH] sendData: Protokoll nicht gestartet");
     return false;
   }
+  if (toNode == kNodenumBroadcast) wantAck = false;
 
   uint8_t plain[kMaxPayload];
   pb_ostream_t ostream = pb_ostream_from_buffer(plain, sizeof(plain));
@@ -147,16 +201,18 @@ bool sendData(uint32_t toNode, const meshtastic_Data &data, uint8_t hopLimit = k
 
   uint32_t packetId = esp_random();
   if (packetId == 0) packetId = 1;
+  if (outPacketId) *outPacketId = packetId;
 
-  aesCtrCrypt(g_myNodeNum, packetId, plain, plainLen);
+  aesCtrCrypt(channel.psk, g_myNodeNum, packetId, plain, plainLen);
 
   PacketHeaderRaw header;
   header.to = toNode;
   header.from = g_myNodeNum;
   header.id = packetId;
   header.flags = hopLimit & kFlagsHopLimitMask;
+  header.flags |= wantAck ? kFlagsWantAckMask : 0;
   header.flags |= (hopLimit << kFlagsHopStartShift) & kFlagsHopStartMask;
-  header.channel = defaultChannelHash();
+  header.channel = channel.hash;
   header.next_hop = 0;
   header.relay_node = 0;
 
@@ -179,7 +235,7 @@ bool sendData(uint32_t toNode, const meshtastic_Data &data, uint8_t hopLimit = k
 // packet we're acking, hop_limit=0, want_ack=false on the ack itself (no
 // ack-for-the-ack). We never rebroadcast (we're a leaf node), so the
 // "!perhapsRebroadcast" condition is always true for us here.
-void sendRoutingAck(uint32_t toNode, uint32_t requestId) {
+void sendRoutingAck(uint32_t toNode, uint32_t requestId, const MeshChannel &channel) {
   meshtastic_Routing routing = meshtastic_Routing_init_zero;
   routing.which_variant = meshtastic_Routing_error_reason_tag;
   routing.error_reason = meshtastic_Routing_Error_NONE;
@@ -197,8 +253,9 @@ void sendRoutingAck(uint32_t toNode, uint32_t requestId) {
   data.payload.size = rstream.bytes_written;
   data.request_id = requestId;
 
-  Serial.printf("[MESH] Sende ACK an !%08x fuer Paket 0x%08x\n", (unsigned)toNode, (unsigned)requestId);
-  sendData(toNode, data, /*hopLimit=*/0);
+  Serial.printf("[MESH] Sende ACK an !%08x fuer Paket 0x%08x (Kanal \"%s\")\n", (unsigned)toNode, (unsigned)requestId,
+                channel.name);
+  sendData(toNode, data, channel, /*hopLimit=*/0);
 }
 
 // Real apps need to know who we are (long/short name, hardware model)
@@ -233,7 +290,7 @@ void sendNodeInfo(uint32_t toNode) {
   data.payload.size = ustream.bytes_written;
 
   Serial.printf("[MESH] Sende NodeInfo an !%08x\n", (unsigned)toNode);
-  sendData(toNode, data);
+  sendData(toNode, data, g_publicChannel); // discovery always happens on the public channel
 }
 
 // Same LAGE: wire format src/xiao/main.cpp parses (see main README
@@ -278,10 +335,10 @@ void handleReceivedPacket(const uint8_t *buf, size_t len) {
   PacketHeaderRaw header;
   memcpy(&header, buf, sizeof(header));
 
-  uint8_t expectedHash = defaultChannelHash();
-  if (header.channel != expectedHash) {
-    Serial.printf("[MESH] Paket auf fremdem Kanal ignoriert (hash 0x%02x, erwartet 0x%02x fuer \"%s\")\n", header.channel,
-                  expectedHash, kChannelName);
+  const MeshChannel *channel = findChannelByHash(header.channel);
+  if (!channel) {
+    Serial.printf("[MESH] Paket auf fremdem Kanal ignoriert (hash 0x%02x, kennen nur 0x%02x \"%s\" und 0x%02x \"%s\")\n",
+                  header.channel, g_publicChannel.hash, g_publicChannel.name, g_privateChannel.hash, g_privateChannel.name);
     return;
   }
 
@@ -297,7 +354,7 @@ void handleReceivedPacket(const uint8_t *buf, size_t len) {
 
   static uint8_t plain[kMaxPayload];
   memcpy(plain, buf + sizeof(PacketHeaderRaw), cipherLen);
-  aesCtrCrypt(header.from, header.id, plain, cipherLen);
+  aesCtrCrypt(channel->psk, header.from, header.id, plain, cipherLen);
 
   meshtastic_Data data = meshtastic_Data_init_zero;
   pb_istream_t stream = pb_istream_from_buffer(plain, cipherLen);
@@ -308,8 +365,9 @@ void handleReceivedPacket(const uint8_t *buf, size_t len) {
 
   float rssi = lora_radio_instance().getRSSI();
   float snr = lora_radio_instance().getSNR();
-  Serial.printf("[MESH] Paket von !%08x an !%08x, portnum=%d, %u Bytes, RSSI=%.1fdBm SNR=%.1fdB\n", (unsigned)header.from,
-                (unsigned)header.to, (int)data.portnum, (unsigned)data.payload.size, rssi, snr);
+  Serial.printf("[MESH] Paket von !%08x an !%08x, Kanal \"%s\", portnum=%d, %u Bytes, RSSI=%.1fdBm SNR=%.1fdB\n",
+                (unsigned)header.from, (unsigned)header.to, channel->name, (int)data.portnum, (unsigned)data.payload.size, rssi,
+                snr);
 
   // NextHopRouter.cpp: "if (!perhapsRebroadcast(p) && isToUs(p) && p->want_ack)
   // sendAckNak(...)" -- only for packets addressed directly to us (not
@@ -317,10 +375,16 @@ void handleReceivedPacket(const uint8_t *buf, size_t len) {
   bool addressedToUs = (header.to == g_myNodeNum);
   bool wantAck = (header.flags & kFlagsWantAckMask) != 0;
   if (addressedToUs && wantAck) {
-    sendRoutingAck(header.from, header.id);
+    sendRoutingAck(header.from, header.id, *channel);
   }
 
-  if (data.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) {
+  if (data.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP || data.portnum == meshtastic_PortNum_PRIVATE_APP) {
+    // PRIVATE_APP is what meshtastic_send_emergency() actually sends as a
+    // direct message (see its comment for why: modern firmware's Router.cpp
+    // rejects non-PKI direct TEXT_MESSAGE_APP as a "legacy DM" security
+    // policy, found live against a real device -- PRIVATE_APP isn't subject
+    // to that check and is the officially reserved portnum >= 256 for
+    // exactly this kind of custom application traffic).
     char text[kMaxPayload + 1];
     size_t n = data.payload.size < sizeof(text) - 1 ? data.payload.size : sizeof(text) - 1;
     memcpy(text, data.payload.bytes, n);
@@ -334,6 +398,11 @@ void handleReceivedPacket(const uint8_t *buf, size_t len) {
       Serial.printf("[MESH] ACK von !%08x fuer unser Paket 0x%08x, error_reason=%d%s\n", (unsigned)header.from,
                     (unsigned)data.request_id, (int)routing.error_reason,
                     routing.error_reason == meshtastic_Routing_Error_NONE ? " (zugestellt)" : "");
+      if (data.request_id != 0 && data.request_id == g_pendingEmergencyPacketId &&
+          routing.error_reason == meshtastic_Routing_Error_NONE) {
+        g_emergencyAckReceived = true;
+        Serial.println("[MESH] Notmeldung von der Leitstelle bestaetigt!");
+      }
     }
   } else if (data.portnum == meshtastic_PortNum_NODEINFO_APP) {
     meshtastic_User user = meshtastic_User_init_zero;
@@ -355,6 +424,8 @@ bool meshtastic_proto_begin() {
     return false;
   }
   g_myNodeNum = deriveNodeNum();
+  g_publicChannel.hash = channelHash(g_publicChannel);
+  g_privateChannel.hash = channelHash(g_privateChannel);
 
   SX1262 &radio = lora_radio_instance();
   float freq = defaultChannelFrequencyMHz();
@@ -372,9 +443,12 @@ bool meshtastic_proto_begin() {
   // against another device the best chance of actually being heard.
   if (state == RADIOLIB_ERR_NONE) state = radio.setRxBoostedGainMode(true);
 
-  Serial.printf("[MESH] Meshtastic-Protokoll: Node !%08x, %.3f MHz, BW%.0f SF%d CR4/%d, Sync 0x%02x, Kanal-Hash 0x%02x (\"%s\")\n",
-                (unsigned)g_myNodeNum, freq, kBandwidthKHz, kSpreadingFactor, kCodingRate, kSyncWord, defaultChannelHash(),
-                kChannelName);
+  Serial.printf(
+      "[MESH] Meshtastic-Protokoll: Node !%08x, %.3f MHz, BW%.0f SF%d CR4/%d, Sync 0x%02x\n"
+      "  Kanal \"%s\" Hash 0x%02x (oeffentlich, Discovery/Test)\n"
+      "  Kanal \"%s\" Hash 0x%02x (privat, Notmeldungen)\n",
+      (unsigned)g_myNodeNum, freq, kBandwidthKHz, kSpreadingFactor, kCodingRate, kSyncWord, g_publicChannel.name,
+      g_publicChannel.hash, g_privateChannel.name, g_privateChannel.hash);
 
   if (state != RADIOLIB_ERR_NONE) {
     Serial.printf("[MESH] Radio-Konfiguration fehlgeschlagen: %d\n", state);
@@ -427,32 +501,70 @@ bool meshtastic_proto_send_text(const char *text) {
   memcpy(data.payload.bytes, text, textLen);
   data.payload.size = textLen;
 
-  Serial.printf("[MESH] Sende Text \"%s\"\n", text);
-  // Broadcast, not addressed to a specific node -- real firmware "Never
-  // set[s] the want_ack flag on broadcast packets" (Router.cpp), so this
-  // can never get a real delivery ACK back, only a local "radio accepted
-  // it for transmission" confirmation. See meshtastic_send_emergency()'s
-  // comment for what that means for the emergency-report use case.
-  return sendData(kNodenumBroadcast, data);
+  Serial.printf("[MESH] Sende Text \"%s\" (oeffentlicher Kanal, Broadcast)\n", text);
+  // Broadcast on the public channel, not addressed to a specific node --
+  // real firmware "Never set[s] the want_ack flag on broadcast packets"
+  // (Router.cpp), so this can never get a real delivery ACK back, only a
+  // local "radio accepted it for transmission" confirmation. This is the
+  // generic test path (`mesh send` serial command); emergency reports use
+  // meshtastic_send_emergency() instead, which sends a direct message on
+  // the private channel and DOES get a real ACK.
+  return sendData(kNodenumBroadcast, data, g_publicChannel);
 }
 
-// IMPORTANT for the emergency terminal's "success" display: this still
-// broadcasts (so anyone listening on the channel picks it up, not just one
-// pre-configured node), and real Meshtastic never ACKs broadcasts by
-// design (see meshtastic_proto_send_text()'s comment). So g_last_send_ok
-// (ui_model.cpp) can only ever mean "the radio transmitted it locally" --
-// never "someone actually received it", no matter how this function is
-// implemented. Real mesh-delivery confirmation needs sending as a direct
-// message to a specific, known node instead (which then DOES get a real
-// ROUTING_APP ack via handleReceivedPacket() -> sendRoutingAck(), already
-// implemented and verified against a real device) -- a station-config /
-// scope decision, not something to silently switch to here.
+// 2026-09-18 decision (real-device testing found broadcasts never show as
+// "delivered" in Meshtastic apps -- confirmed against source, broadcasts
+// are never ACKed by design): emergency reports are now a direct message,
+// on the private "kayna-funkt" channel, to the configured dispatch node
+// (station_config().dispatchNodeNum), with a real ACK request. This DOES
+// get a genuine ROUTING_APP ack back (already verified against a real
+// device) -- meshtastic_proto_emergency_ack_received() reports whether one
+// actually arrived, for ui_model.cpp to wait on instead of just trusting
+// the local transmit() result.
+//
+// Uses PRIVATE_APP (portnum 256, officially reserved for exactly this),
+// NOT TEXT_MESSAGE_APP: found live against a real device that modern
+// Meshtastic firmware's Router.cpp rejects non-PKI direct messages on
+// TEXT_MESSAGE_APP outright ("Rejecting legacy DM" -- a deliberate security
+// policy, not a bug) even when the channel/PSK/hash are all correct.
+// PRIVATE_APP isn't subject to that check. handleReceivedPacket() treats
+// PRIVATE_APP the same as TEXT_MESSAGE_APP for our own LAGE: parsing.
+//
+// Trade-off the user explicitly accepted: this only reaches the one
+// configured dispatch node, not everyone on the public channel. If wider
+// broadcast reach is later wanted alongside the ACK, that would mean
+// sending both (more airtime per report) -- not implemented, flagged here
+// for whoever revisits this.
 bool meshtastic_send_emergency(const char *category, const char *type, const char *label) {
+  uint32_t dispatch = station_config().dispatchNodeNum;
+  if (dispatch == 0 || dispatch == kNodenumBroadcast) {
+    Serial.println("[MESH] send_emergency: keine Leitstelle konfiguriert (station_config().dispatchNodeNum) -- 'dispatch set "
+                    "<hex-node-id>' ueber Serial");
+    g_pendingEmergencyPacketId = 0;
+    g_emergencyAckReceived = false;
+    return false;
+  }
+
   char buf[160];
   snprintf(buf, sizeof(buf), "LAGE:NEU;%s;offen;%s (Touch-Terminal, Typ: %s)", category, label, type);
-  bool ok = meshtastic_proto_send_text(buf);
+
+  meshtastic_Data data = meshtastic_Data_init_zero;
+  data.portnum = meshtastic_PortNum_PRIVATE_APP;
+  size_t textLen = strlen(buf);
+  if (textLen > sizeof(data.payload.bytes)) textLen = sizeof(data.payload.bytes);
+  memcpy(data.payload.bytes, buf, textLen);
+  data.payload.size = textLen;
+
+  g_emergencyAckReceived = false;
+  uint32_t packetId = 0;
+  Serial.printf("[MESH] Sende Notmeldung \"%s\" als Direktnachricht an Leitstelle !%08x (Kanal \"%s\")\n", buf,
+                (unsigned)dispatch, g_privateChannel.name);
+  bool ok = sendData(dispatch, data, g_privateChannel, kHopLimitDefault, /*wantAck=*/true, &packetId);
+  g_pendingEmergencyPacketId = ok ? packetId : 0;
   if (ok) ui_model_notify_tx();
   return ok;
 }
+
+bool meshtastic_proto_emergency_ack_received() { return g_emergencyAckReceived; }
 
 uint32_t meshtastic_proto_my_node_num() { return g_myNodeNum; }
