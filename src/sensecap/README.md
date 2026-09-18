@@ -13,12 +13,12 @@ Build/Flash: `pio run -e sensecap_indicator -t upload`
 | Teil | Status |
 |---|---|
 | Display (ST7701S 480x480 RGB) + Touch (FT6336U) | ✅ läuft stabil |
-| Menü/Notfall-Flow (LVGL, `ui_model.cpp`) | ✅ läuft, inkl. Halte-Bestätigung, Sende-/Erfolg/Fehlschlag-Screens |
-| Lagemeldungen in SQLite (`lage_db`, wiederverwendet von der XIAO-Säule) | ✅ läuft |
+| Menü/Notfall-Flow (LVGL, `ui_model.cpp`) | ✅ läuft, inkl. Halte-Bestätigung, mehrstufigem Sende-Fortschrittsbalken, Erfolg/Fehlschlag-Screens |
+| Lagemeldungen in SQLite (`lage_db`, wiederverwendet von der XIAO-Säule) | ✅ läuft (Init-Bug am 2026-09-18 gefunden und gefixt, siehe Abschnitt 5) |
 | Uhrzeit | ⚠️ nur Build-Zeitpunkt automatisch gesetzt, kein RTC/NTP — `settime YYYY-MM-DD HH:MM:SS` über Serial |
-| Meshtastic-Anbindung | ✅ **echtes Meshtastic-Protokoll** über den eingebauten SX1262 (Weg 1) — Paketheader, AES128-CTR-Verschlüsselung, Protobuf-Payload, Kanal-Hash, exakte Funkparameter, alles gegen den echten Firmware-Quellcode verifiziert (siehe Abschnitt 5). Sende- und Empfangspfad laufen; noch nicht gegen ein zweites echtes Meshtastic-Gerät getestet (keins zur Hand in dieser Session) |
+| Meshtastic-Anbindung | ✅ **echtes Meshtastic-Protokoll**, live gegen ein reales Gerät verifiziert: Broadcast bidirektional, Direktnachricht mit echter Zustellbestätigung (ROUTING_APP-ACK) an eine konfigurierbare, persistente Leitstelle. Details siehe Abschnitt 5. |
 | Standby-Screen, Alarm-Blinken, Batterie/Solar/Netz-Symbol | ❌ noch nicht begonnen |
-| Lokaler Betreiber / Onboarding | ⚠️ nur Datenstruktur (`station_config.h`), noch keine Eingabe-UI |
+| Lokaler Betreiber / Onboarding | ⚠️ nur Datenstruktur (`station_config.h`), Leitstellen-Node-Nummer per Serial-Kommando setzbar (persistent in NVS), noch keine Eingabe-UI |
 
 ---
 
@@ -101,7 +101,9 @@ RELEASED-Events, kein eigenes Touch-Polling mehr nötig).
 ## 5. Meshtastic-Anbindung
 
 Siehe **[Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/36)**
-für den vollen Verlauf. Kurzfassung, Stand 2026-09-18 (autonome Nachtsession):
+für den vollen Verlauf, und das [Wiki](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/wiki/SenseCAP-Meshtastic)
+für die kompakte Status-Zusammenfassung. Kurzfassung, Stand 2026-09-18 (autonome
+Nachtsession + Live-Test-Folgesession am selben Tag):
 
 ### 5.1 CHIP_NOT_FOUND gelöst (Weg 1, `lora_radio.cpp`)
 
@@ -122,17 +124,16 @@ wurde entfernt.
 
 ### 5.2 Echtes Meshtastic-Protokoll (nicht nur rohes LoRa)
 
-`meshtastic_proto.h/.cpp` implementiert das tatsächliche Meshtastic-Wire-Format auf dem
-öffentlichen Default-Primärkanal ("LongFast", Standard-PSK) — kein eigenes/inkompatibles
-Format. Jede Konstante ist direkt aus `meshtastic/firmware`s eigenem Quellcode gelesen
-(nicht aus dem Gedächtnis rekonstruiert):
+`meshtastic_proto.h/.cpp` implementiert das tatsächliche Meshtastic-Wire-Format —
+kein eigenes/inkompatibles Format. Jede Konstante ist direkt aus `meshtastic/firmware`s
+eigenem Quellcode gelesen (nicht aus dem Gedächtnis rekonstruiert):
 
 | Was | Wert | Quelle |
 |---|---|---|
 | Paketheader (16 Byte: to/from/id/flags/channel/next_hop/relay_node) | exakter Byte-Layout | `RadioInterface.h` (`PacketHeader`) |
 | Verschlüsselung | AES128-CTR, Nonce = 8B PacketID (LE) + 4B NodeNum (LE) + 4B Zähler | `CryptoEngine.cpp/.h` |
 | Default-Kanal-PSK | `d4 f1 bb 3a 20 29 07 59 f0 bc ff ab cf 4e 69 01` (öffentlich, kein Geheimnis) | `Channels.h` (`defaultpsk`) |
-| Kanal-Hash | `xorHash("LongFast") ^ xorHash(psk)` | `Channels.cpp` (`generateHash`) |
+| Kanal-Hash | `xorHash(name) ^ xorHash(psk)` | `Channels.cpp` (`generateHash`) |
 | Payload | Protobuf-`Data`-Message (Portnum + Bytes) | `mesh.pb.h`, vendored in `lib/meshtastic_proto/` |
 | Frequenz (Region EU_868 + Preset LONG_FAST) | **869.525 MHz**, genau ein Kanal-Slot (kein Hopping — `numChannels = floor(0.25/0.25) = 1`) | `RadioInterface.cpp` (`applyModemConfig`, `regions[]`) |
 | BW/SF/CR/Sync/Präambel | 250kHz / SF11 / 4:5 / `0x2b` / 16 Symbole | `MeshRadio.h`, `RadioLibInterface.h`, `RadioInterface.h` |
@@ -141,43 +142,91 @@ Protobuf: nicht händisch kodiert, sondern nanopb 0.4.9.1 + Meshtastics eigene g
 `.pb.h/.cpp` vendored in `lib/meshtastic_proto/` (siehe dessen README für Provenienz) —
 das eliminiert praktisch jedes Risiko eines Feldnummern-/Wire-Type-Fehlers.
 
-**Verifiziert, nicht nur behauptet** (Ehrlichkeits-Grundsatz dieses Projekts): das eigene
-Gerät hat sein eigenes gesendetes Paket per HF-Selbstkopplung empfangen und korrekt
-entschlüsselt/dekodiert (voller Roundtrip: Encode → Verschlüsseln → Senden → Empfangen →
-Entschlüsseln → Decode). Zusätzlich wurden Klartext- und Chiffretext-Bytes eines echten
-gesendeten Pakets abgegriffen und **unabhängig** in Python (pycryptodome, komplett andere
-Implementierung als das on-device mbedtls) nachgerechnet — Ergebnis war byte-identisch.
-Das bestätigt AES-CTR-Nonce-Konstruktion und Protobuf-Encoding gegen eine zweite,
-unabhängige Implementierung. **Nicht verifiziert:** Empfang/Versand gegen ein zweites
-echtes Meshtastic-Gerät (App oder Node) — keins in dieser Session zur Hand. Das ist der
-eigentliche Test für morgen früh.
+**Zwei Kanäle gleichzeitig** (beide auf derselben Frequenz — Region+Preset legen die
+Frequenz fest, unabhängig vom Kanalnamen/-schlüssel, genau wie bei echter Firmware mit
+mehreren Kanälen auf einem Radio):
+
+| Kanal | Name/PSK | Zweck |
+|---|---|---|
+| Öffentlich | `"LongFast"`, Standard-PSK (Index 1) — der Werkskanal jedes Meshtastic-Geräts | NodeInfo-Austausch, generische ACK-Antworten, `mesh send`-Testkommando |
+| Privat | `"kayna-funkt"`, kurzer Preset-Schlüssel (Index 5, offiziell in `channel.proto` dokumentiertes Kurz-Schema) | Notmeldungen als Direktnachricht — siehe 5.5 warum nicht der öffentliche Kanal |
+
+**Verifiziert, nicht nur behauptet** (Ehrlichkeits-Grundsatz dieses Projekts): erst per
+HF-Selbstempfang-Roundtrip und unabhängiger Krypto-Gegenrechnung in Python
+(pycryptodome, komplett andere Implementierung als das on-device mbedtls — Ergebnis
+byte-identisch), dann **live gegen ein reales Meshtastic-Gerät** (siehe 5.5).
 
 ### 5.3 Was zum Testen bereitsteht
 
-- Serial-Kommando `mesh send <text>` — sendet eine echte Meshtastic-Textnachricht auf
-  dem Default-Kanal. Mit der offiziellen Meshtastic-App (oder einem echten Node) auf
-  EU868 + LongFast-Preset (Werkseinstellung) sollte das ankommen.
+- Serial-Kommando `mesh send <text>` — sendet eine echte Meshtastic-Textnachricht als
+  Broadcast auf dem öffentlichen Kanal.
+- Serial-Kommando `dispatch set <hex-node-id>` — legt die Leitstellen-Node-Nummer fest
+  (persistent in NVS, siehe 5.5).
+- Serial-Kommando `test emergency` — löst denselben Sendepfad wie der Touchscreen aus,
+  ohne dass jemand den Bildschirm anfassen muss (Diagnose).
 - Der Notfall-Bestätigungs-Flow (`ui_model.cpp` → `meshtastic_send_emergency()`) sendet
-  jetzt echte Meshtastic-Textnachrichten im bekannten `LAGE:...`-Format statt der alten
-  UART-Bridge.
-- Empfang läuft mit: eingehende Textnachrichten (auch von echten Fremdgeräten auf
-  demselben Kanal) werden dekodiert, geloggt, und `LAGE:`-formatierte Nachrichten in
+  echte Meshtastic-Direktnachrichten im bekannten `LAGE:...`-Format an die konfigurierte
+  Leitstelle, mit Fortschrittsbalken (3 echte Stationen: Verbindungsaufbau → Senden →
+  Warten auf Bestätigung) und wartet bis zu 8s auf ein echtes ACK, bevor der
+  Erfolgs-Screen gezeigt wird.
+- Empfang läuft mit: eingehende Textnachrichten (auch von echten Fremdgeräten auf einem
+  der beiden Kanäle) werden dekodiert, geloggt, und `LAGE:`-formatierte Nachrichten in
   `lage_db` übernommen (`ui_model_notify_rx()` für die Statusleiste).
-- ONLINE/OFFLINE in der Statusleiste zeigt jetzt einen echten Zustand: `true` sobald
+- ONLINE/OFFLINE in der Statusleiste zeigt einen echten Zustand: `true` sobald
   `lora_radio_begin()` **und** `meshtastic_proto_begin()` beim Boot erfolgreich waren.
 
 ### 5.4 Bewusst nicht gemacht
 
 - Kein Routing/Rebroadcast (Store-and-Forward über mehrere Hops) — wir senden/empfangen
   nur direkt, wie ein einfacher Leaf-Node.
-  Kein DIO1-Hardware-Interrupt (der Pin hängt am IO-Expander, nicht an einem echten
+- Kein DIO1-Hardware-Interrupt (der Pin hängt am IO-Expander, nicht an einem echten
   ESP32-GPIO) — `meshtastic_proto_loop()` pollt stattdessen `getIrqStatus()` per SPI
   jede `loop()`-Iteration, unkritisch für die Latenz dieses Projekts.
-- Kein PKI/Direktnachrichten (Curve25519), keine Zusatzkanäle — nur der öffentliche
-  Default-Kanal.
+- Kein PKI/Curve25519 — nur Kanal-PSK-Verschlüsselung (deshalb `PRIVATE_APP` statt
+  `TEXT_MESSAGE_APP` für Direktnachrichten, siehe 5.5).
+- Nur eine feste Leitstellen-Node-Nummer, kein Broadcast *und* Bestätigung gleichzeitig
+  (würde zwei Pakete pro Notmeldung bedeuten) — siehe Code-Kommentar bei
+  `meshtastic_send_emergency()`.
 - Node-Nummer wird aus der ESP32-MAC abgeleitet, nicht mit Meshtastics eigenem Algorithmus
   nachgebildet — für die Protokoll-Kompatibilität irrelevant (jede stabile, von 0 und
   Broadcast verschiedene 32-Bit-Zahl funktioniert).
+
+### 5.5 Live-Test-Ergebnisse (2026-09-18, Folgesession am selben Tag)
+
+Mit einem echten Meshtastic-Gerät getestet. Ergebnis: Broadcast funktioniert sofort
+bidirektional (Text hin und zurück, auch auf dem neu angelegten privaten Kanal). Für
+Direktnachrichten mit Zustellbestätigung mussten zwei echte, live gefundene Blocker
+gelöst werden:
+
+1. **"Rejecting legacy DM"**: moderne Meshtastic-Firmware (`Router.cpp`) lehnt
+   nicht-PKI-verschlüsselte Direktnachrichten auf Portnum `TEXT_MESSAGE_APP` grundsätzlich
+   ab — eine bewusste Sicherheitsmaßnahme, kein Bug, unabhängig davon ob Kanal/PSK/Hash
+   korrekt sind. Fix: Notmeldungen laufen über `PRIVATE_APP` (Portnum 256, offiziell in
+   `portnums.proto` für genau solche eigenen Anwendungen reserviert), das ist von dieser
+   Prüfung ausgenommen.
+2. **Broadcasts werden nie bestätigt**: Router.cpp entfernt `want_ack` explizit für jeden
+   Broadcast. Für einen echten Zustellungs-Faktor auf der Notmeldesäule (Nutzeranforderung)
+   mussten Notmeldungen von Broadcast auf Direktnachricht an eine feste, konfigurierbare
+   Leitstellen-Node-Nummer umgestellt werden — siehe den neuen privaten Kanal in 5.2.
+
+Nach beiden Fixes: reproduzierbar echtes `ROUTING_APP`-ACK (`error_reason=NONE`) vom
+Testgerät erhalten, geloggt als "Notmeldung von der Leitstelle bestaetigt!".
+
+Dabei zwei weitere reale Bugs gefunden und sofort gefixt:
+
+- **Selbstecho-Endlosschleife**: die eigene NodeInfo-Broadcast kam per HF-Selbstkopplung
+  zurück, das Gerät hielt sich selbst für einen fremden Absender und antwortete sich
+  selbst — Endlosschleife, die den Kanal zugespammt hat. Fix: `header.from == eigene
+  Node-Nummer` wird jetzt ganz am Anfang von `handleReceivedPacket()` verworfen.
+- **`lageDbBegin()` fehlte komplett** auf diesem Board (im Gegensatz zu `src/xiao/main.cpp`)
+  — die SQLite-Datenbank war seit Board-Einführung nie geöffnet, jeder Schreib-/Lesezugriff
+  ist still fehlgeschlagen. Symptom: Notmeldungshistorie zeigte immer ein leeres Feld ohne
+  Absturz (SQLite gibt bei Null-Handle nur einen Fehlercode zurück statt zu asserten) — sah
+  nach Rendering-Bug aus, war aber schlicht "hat nie etwas gespeichert".
+
+Außerdem gefunden: die Leitstellen-Node-Nummer war nur im RAM, jeder Neustart/Neuflash
+setzte sie zurück auf 0 ohne UI-Hinweis — vermutlich Ursache eines zwischenzeitlich
+gemeldeten Fehlschlags. Jetzt persistent in NVS (`station_config_set_dispatch_node()`).
 
 ---
 
@@ -193,3 +242,8 @@ eigentliche Test für morgen früh.
 - `do_trigger_emergency` speichert die Meldung immer in `lage_db` (Status wandert
   „wird übermittelt" → „übermittelt"/„fehlgeschlagen") — unabhängig davon, ob wirklich
   etwas gesendet wurde.
+- Vorgangsnummer (`VG-<DB-ID>`) und Zeitstempel in der Notmeldungshistorie sind echt
+  (DB-Rowid bzw. echte Wall-Clock-Sekunden, siehe `lageDbSetTimeProvider` in
+  `main.cpp`) — vorausgesetzt die Uhr wurde gestellt (siehe Uhrzeit-Zeile oben).
+- Leitstellen-Node-Nummer (`dispatch set`) ist persistent in NVS, aber es gibt noch
+  keine UI dafür — nur Serial.

@@ -268,15 +268,17 @@ aktueller Stand der Meshtastic-Anbindung): **[src/sensecap/README.md](src/sensec
 
 Kurzstand: Display/Touch/Menü/Datenbank laufen stabil. Meshtastic-Anbindung läuft
 über den eingebauten SX1262 mit echtem Meshtastic-Protokoll (Paketformat,
-Verschlüsselung, Kanal-Hash — kein rohes/inkompatibles Signal), verifiziert per
-Selbstempfang und unabhängiger Krypto-Gegenrechnung; noch nicht gegen ein zweites
-echtes Meshtastic-Gerät getestet. Details in
-[Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/36).
+Verschlüsselung, Kanal-Hash — kein rohes/inkompatibles Signal) und ist gegen ein
+reales Meshtastic-Gerät verifiziert: Broadcast bidirektional, Direktnachricht mit
+echter Zustellbestätigung (ROUTING_APP-ACK) an eine konfigurierbare Leitstelle.
+Details im [Wiki](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/wiki/SenseCAP-Meshtastic)
+und in [Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/36).
 
 ---
 
 ## 🔗 Weiterführende Links
 
+- [Projekt-Wiki](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/wiki) — Status-Dashboard über beide Boards und alle Themenbereiche
 - [Seeed XIAO ESP32-S3 – Getting Started](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/)
 - [Meshtastic – Offizielle Dokumentation](https://meshtastic.org/docs/)
 - [Meshtastic – Serial Module Konfiguration](https://meshtastic.org/docs/configuration/module/serial/)
@@ -295,13 +297,20 @@ echtes Meshtastic-Gerät getestet. Details in
   Payload und Kanal-Hash exakt nach `meshtastic/firmware`s eigenem Quellcode
   nachgebaut (Frequenz/BW/SF/CR/Sync/Präambel ebenso). Protobuf-Definitionen nicht
   handkodiert, sondern nanopb + Meshtastics eigene generierte Header vendored
-  (`lib/meshtastic_proto/`). Verifiziert per Selbstempfang-Roundtrip und
-  unabhängiger Krypto-Gegenrechnung in Python — noch nicht gegen ein zweites
-  echtes Meshtastic-Gerät getestet. Details: [src/sensecap/README.md](src/sensecap/README.md)
+  (`lib/meshtastic_proto/`). Details: [src/sensecap/README.md](src/sensecap/README.md)
   Abschnitt 5, [Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/36).
 - Die alte externe-Node-Bridge (`meshtastic_bridge.h/.cpp`, Weg 2) für dieses Board
   entfernt — endgültig nicht machbar (kein freier GPIO, RP2040-Co-Prozessor hat keine
   Hardware-Verbindung zum SX1262, siehe Board-README).
+- **Live gegen ein echtes Meshtastic-Gerät verifiziert** (Folgesession, selber Tag):
+  Broadcast bidirektional bestätigt, danach zwei reale Blocker gefunden und behoben —
+  moderne Firmware lehnt nicht-PKI-Direktnachrichten auf `TEXT_MESSAGE_APP` ab
+  ("legacy DM", Fix: eigener `PRIVATE_APP`-Portnum), und Broadcasts werden nie
+  bestätigt (Fix: eigener privater Kanal + Direktnachricht mit echtem
+  `ROUTING_APP`-ACK an eine konfigurierbare Leitstelle). NodeInfo-Austausch ergänzt.
+  Nebenbei einen unabhängigen, bis dahin unbemerkten Bug gefunden: `lageDbBegin()`
+  fehlte auf diesem Board komplett, die Notmeldungshistorie lief seit Board-Einführung
+  ins Leere. Details im [Wiki](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/wiki/SenseCAP-Meshtastic).
 
 ### 2026-09-17
 
