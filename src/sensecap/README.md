@@ -12,15 +12,15 @@ Build/Flash: `pio run -e sensecap_indicator -t upload`
 
 | Teil | Status |
 |---|---|
-| Display (ST7701S 480x480 RGB) + Touch (FT6336U) | ✅ läuft stabil |
-| Menü/Notfall-Flow (LVGL, `ui_model.cpp`) | ✅ läuft, inkl. Halte-Bestätigung, mehrstufigem Sende-Fortschrittsbalken, Erfolg/Fehlschlag-Screens |
-| Lagemeldungen in SQLite (`lage_db`, wiederverwendet von der XIAO-Säule) | ✅ läuft (Init-Bug am 2026-09-18 gefunden und gefixt, siehe Abschnitt 5) |
-| Uhrzeit | ⚠️ nur Build-Zeitpunkt automatisch gesetzt, kein RTC/NTP — `settime YYYY-MM-DD HH:MM:SS` über Serial |
-| Meshtastic-Anbindung | ✅ **echtes Meshtastic-Protokoll**, live gegen ein reales Gerät verifiziert: Broadcast bidirektional, Direktnachricht mit echter Zustellbestätigung (ROUTING_APP-ACK) an eine konfigurierbare, persistente Leitstelle. Details siehe Abschnitt 5. |
+| Display (ST7701S 480x480 RGB) + Touch (FT6336U) | ✅ läuft stabil (LVGL-Refresh-Rate am 2026-09-18 von 10ms/"100fps" auf 33ms/"30fps" korrigiert, siehe Abschnitt 5.6 — vorher hat LVGL schneller geflusht als `full_refresh=1` + das Panel synchron liefern konnten) |
+| Menü/Notfall-Flow (LVGL, `ui_model.cpp`) | ✅ läuft, inkl. Halte-Bestätigung (kreisrunder Fortschrittsring, kein Balken mehr), CLI-artigem 2-Stationen-Sende-Screen, Erfolg/Fehlschlag-Screens |
+| Lagemeldungen in SQLite (`lage_db`, wiederverwendet von der XIAO-Säule) | ✅ läuft — siehe Abschnitt 5.6 für eine wichtige Plattform-Einschränkung (Query-Form) die am 2026-09-18 gefunden wurde |
+| Uhrzeit | ⚠️ kein RTC/NTP. Jetzt 3-stufig: (1) echte Mesh-Position-Pakete mit `time`-Feld, falls je eines ankommt, (2) letzter bekannter Stand aus NVS (überlebt Neustarts monoton), (3) Build-Zeitpunkt als letzter Fallback. `settime YYYY-MM-DD HH:MM:SS` überschreibt immer. |
+| Meshtastic-Anbindung | ✅ **echtes Meshtastic-Protokoll**, live gegen ein reales Gerät verifiziert: Broadcast bidirektional, Direktnachricht mit echtem **Anwendungs-ACK** (nicht nur Transport-ACK — siehe Abschnitt 5.6, B5-Fix) an eine konfigurierbare, persistente Leitstelle. Details siehe Abschnitt 5. |
 | Absender-Allowlist / Ratenbegrenzung (Issues #1, #3) | ✅ eingebaut (`src/common/mesh_security.h`) — sicherer Default: leere Allowlist verwirft alle eingehenden Lagemeldungen, `allow add <hex-node-id>` zum Freischalten |
-| Heartbeat an Leitstelle (Issue #13) | ✅ periodischer Status-Broadcast (alle 2 Min.), ehrlich ohne Akku-/Sabotage-Werte (keine Sensorik vorhanden) |
-| Standby-Screen, Alarm-Blinken, Batterie/Solar/Netz-Symbol | ❌ noch nicht begonnen |
-| Lokaler Betreiber / Onboarding | ⚠️ nur Datenstruktur (`station_config.h`), Leitstellen-Node-Nummer per Serial-Kommando setzbar (persistent in NVS), noch keine Eingabe-UI |
+| Heartbeat an Leitstelle (Issue #13) | ✅ periodischer Status-Broadcast (alle 15 Min., war 2 Min. bis 2026-09-18 — siehe Fix-Plan), ehrlich ohne Akku-/Sabotage-Werte (keine Sensorik vorhanden) |
+| Standby-Screen, Alarm-Blinken, Batterie/Solar/Netz-Symbol | ❌ noch nicht begonnen (kein ADC/Batterie-Hardware vorhanden, bewusst keine Fake-Anzeige) |
+| Lokaler Betreiber / Onboarding | ⚠️ Datenstruktur (`station_config.h`) + jetzt eine **PIN-geschützte Einstellungen-Seite** im Hauptmenü (Testmodus-Umschalter, Leitstelle-Node-ID, Ort als Freitext) — PIN aktuell Platzhalter `1234`, siehe `station_config.h`. Sprach-Button vorhanden, zeigt ehrlich "noch nicht umgesetzt" (keine echte Übersetzung). |
 
 ---
 
@@ -164,12 +164,15 @@ byte-identisch), dann **live gegen ein reales Meshtastic-Gerät** (siehe 5.5).
   Broadcast auf dem öffentlichen Kanal.
 - Serial-Kommando `dispatch set <hex-node-id>` — legt die Leitstellen-Node-Nummer fest
   (persistent in NVS, siehe 5.5).
-- Serial-Kommando `test emergency` — löst denselben Sendepfad wie der Touchscreen aus,
-  ohne dass jemand den Bildschirm anfassen muss (Diagnose).
+- Serial-Kommando `test emergency` — löst nur den reinen Funk-/Protokoll-Sendepfad aus
+  (ruft `meshtastic_send_emergency()` direkt auf), ohne die UI-Statusmaschine
+  (`g_transmission_pending`) zu durchlaufen. `test emergency ui` löst stattdessen
+  denselben Pfad wie ein echter Touchscreen-Halte-Vorgang aus (VG-Nummerierung,
+  Stufen-Anzeige, Erfolg/Fehlschlag-Screens) — für Tests ohne Touch-Zugriff.
 - Der Notfall-Bestätigungs-Flow (`ui_model.cpp` → `meshtastic_send_emergency()`) sendet
   echte Meshtastic-Direktnachrichten im bekannten `LAGE:...`-Format an die konfigurierte
-  Leitstelle, mit Fortschrittsbalken (3 echte Stationen: Verbindungsaufbau → Senden →
-  Warten auf Bestätigung) und wartet bis zu 8s auf ein echtes ACK, bevor der
+  Leitstelle, mit 2 echten Stationen ("Notmeldung gesendet" / "Von der Leitstelle
+  bestätigt") und wartet bis zu 8s auf ein echtes Anwendungs-ACK (siehe 5.6), bevor der
   Erfolgs-Screen gezeigt wird.
 - Empfang läuft mit: eingehende Textnachrichten (auch von echten Fremdgeräten auf einem
   der beiden Kanäle) werden dekodiert, geloggt, und `LAGE:`-formatierte Nachrichten in
@@ -230,22 +233,95 @@ Außerdem gefunden: die Leitstellen-Node-Nummer war nur im RAM, jeder Neustart/N
 setzte sie zurück auf 0 ohne UI-Hinweis — vermutlich Ursache eines zwischenzeitlich
 gemeldeten Fehlschlags. Jetzt persistent in NVS (`station_config_set_dispatch_node()`).
 
+### 5.6 Testprotokoll + Fix-Runde (2026-09-18, Folgesession)
+
+Nutzer ist strukturiert jeden UI-Bereich durchgegangen (Testprotokoll A-G), daraus ein
+konsolidierter Fix-Plan, live gegen echte Hardware umgesetzt und getestet. Wichtigste
+Funde:
+
+- **B5 (kritisch): Falscher Erfolg möglich gewesen.** Das `ROUTING_APP`-Transport-ACK
+  aus 5.5 bestätigt nur "ein Paket kam irgendwo an", nicht dass die Leitstelle die
+  Notmeldung inhaltlich akzeptiert hat — und wird sogar VOR jeder
+  Sicherheits-/Inhaltsprüfung der Gegenseite gesendet. Live reproduziert: bei zu vielen
+  Nodes im Mesh kam ein Transport-ACK von einer Nicht-Leitstelle zustande, Erfolg wurde
+  fälschlich angezeigt. Fix: eigenes **Anwendungs-ACK** (`LAGE:ACK:<hex packetId>`),
+  das die empfangende Seite erst NACH erfolgreicher `meshSecurityCheck()` + DB-Speicherung
+  sendet (`sendApplicationAck()` in `meshtastic_proto.cpp`), plus Prüfung dass das ACK
+  wirklich vom konfigurierten `dispatchNodeNum` kommt. Das alte Transport-ACK wird nur
+  noch geloggt, nie mehr für Erfolg gewertet. Live end-to-end verifiziert (echtes ACK
+  vom Testknoten via eines kleinen Python-Leitstelle-Simulators, siehe unten).
+- **Plattform-Falle: SQLite/SPIFFS bricht bei bestimmten Query-Formen.** Jede Query mit
+  WHERE-Klausel (selbst trivial `WHERE 1=1`) ODER `ORDER BY` ohne `LIMIT` schlägt auf
+  diesem Sqlite3Esp32+SPIFFS-Setup mit `SQLITE_IOERR` ("disk I/O error") fehl, sobald
+  die Tabelle ein paar Dutzend Zeilen hat — nur `ORDER BY x DESC LIMIT n` ganz ohne
+  WHERE ist zuverlässig. Ausführlich als Kommentar am Anfang von `src/common/lage_db.cpp`
+  dokumentiert; jede neue Query gegen `lagemeldungen`/`ereignisse` muss das beachten
+  (Filtern gehört nach C++, nicht in SQL).
+- **Lageinformationen zeigte fast nichts an**, weil `lageDbGetRecentSummaries()` nur die
+  10 zuletzt geänderten Zeilen der GESAMTEN Tabelle holte und danach erst nach "wirklich
+  empfangen" filterte — bei viel lokaler Testaktivität (Halte-Geste, `test emergency`)
+  füllten lokale Einträge das ganze 10er-Fenster. Fix: großzügiger Rohabruf (50 Zeilen),
+  Filterung + Anzeige-Limit (10) danach in C++.
+- **LVGL-Bildwiederholrate falsch konfiguriert**: `LV_DISP_DEF_REFR_PERIOD` stand auf
+  10ms ("~100fps"), aber `disp_drv.full_refresh=1` (siehe Abschnitt 2) bedeutet jede
+  Änderung löst einen kompletten Flush aus, der auf die reale Panel-Framerate von ~23ms
+  synchronisiert wartet — LVGL hat also ständig schneller geflusht als möglich, was das
+  Sync-Fenster für Tearing/Flackern offen gehalten hat. Jetzt 33ms (~30fps, siehe
+  `include/lv_conf.h`). Nebenfund: die Statusleiste hat bei jedem Tick (~50-100x/Sek.)
+  unconditional ihre Farbe neu gesetzt, auch ohne Änderung — jetzt nur noch bei echter
+  Zustandsänderung.
+- **Neu: Kontakt-Protokollierung.** Jeder Kontakt vom konfigurierten Leitstellen-Node
+  wird jetzt ins Ereignisprotokoll geschrieben (`Kontakt von Leitstelle !xxxxxxxx`,
+  auf 1 Eintrag/2s gedrosselt) — Grundlage für eine künftige echte Krisenstab-Anzeige.
+- **UI-Überarbeitung**: Halte-Bestätigung als kreisrunder Ring statt Balken (mit
+  ruhigem, langsamem Blau-Rot-Wechsel statt hektischer Sinus-Animation — nur der kleine
+  Button pulsiert, nicht der ganze Screen), CLI-artiger 2-Stationen-Sende-Screen
+  ("Notmeldung gesendet" / "Von der Leitstelle bestätigt" — die alte, nur zeitbasierte
+  "Verbindung zur Leitstelle"-Zwischenstation wurde entfernt, da LoRa/Meshtastic keinen
+  echten Verbindungsaufbau-Schritt hat, den man dort hätte zeigen können), Popup-Tastatur
+  in den Einstellungen mit Live-Vorschauzeile, unterschiedliche Hintergrundfarben pro
+  Bereich (Feuerwehr rot, Polizei grün, Krankenwagen teal, Einstellungen dunkel).
+- **Testwerkzeug**: `scratchpad/leitstelle_sim.py` (nicht Teil der Firmware) — ein
+  Python-Skript, das über den zweiten, unabhängigen Meshtastic-Testknoten läuft und
+  echte `LAGE:NEU`-Nachrichten mit einem echten Anwendungs-ACK beantwortet, für
+  End-to-End-Tests ohne eine echte Leitstellen-Software. Serial-Kommando
+  `test emergency ui` (im Unterschied zum älteren `test emergency`) durchläuft dabei
+  denselben Code-Pfad wie ein echter Touchscreen-Halte-Vorgang (VG-Nummerierung,
+  Stufen-Anzeige, Erfolg/Fehlschlag-Screens inklusive), nicht nur die reine
+  Funkübertragung.
+
 ---
 
 ## 6. Bekannte Platzhalter (bewusst, nicht vergessen)
 
-- Info-Historie/Lageinformationen zeigen `lage_db`-Einträge inkl. 3 Beispieleinträgen,
-  die beim ersten Boot einmalig geseedet werden (SPIFFS persistiert, kein erneutes
-  Seeden bei jedem Boot).
+- Lageinformationen zeigt jetzt nur noch echte **empfangene** Meldungen (gefiltert nach
+  `fromNode`, nicht mehr die eigenen lokal ausgelösten Notmeldungen). Systeminfo
+  Krisenstab zeigt ehrlich "noch nicht angebunden" statt Platzhalter-Daten — es gibt
+  noch keine echte Anbindung an ein Krisenstab-System. Die frühere automatische
+  Seed-Befüllung (3 Beispieleinträge beim ersten Boot) wurde entfernt; auf Geräten,
+  die vor diesem Fix schon mal geflasht wurden, können die alten `!seed0001..3`-Zeilen
+  noch in der Datenbank stehen (SPIFFS-persistiert), werden aber von der Filterung
+  korrekt ausgeblendet.
 - Status-Leiste: TX/RX-Punkte sind verdrahtet und blinken bei echtem Funkverkehr
   (`ui_model_notify_tx/rx`). ONLINE/OFFLINE hängt an `ui_model_set_connected`, gesetzt
   in `main.cpp` sobald Radio+Protokoll beim Boot erfolgreich starten (siehe Abschnitt 5).
   `testconnect on|off` über Serial kann das zu Testzwecken übersteuern.
+  **Wichtige Einschränkung (2026-09-18 im Testprotokoll gefunden):**
+  `ui_model_set_connected(true)` wird genau **einmal** beim Boot aufgerufen und danach
+  nie wieder automatisch neu bewertet — ONLINE bedeutet also "Radio hat beim Start
+  erfolgreich initialisiert", **nicht** "ist gerade aktiv mit dem Mesh verbunden" oder
+  "Leitstelle ist gerade erreichbar". Faellt das Radio spaeter aus, oder war nie ein
+  Mesh-Partner in Reichweite, bleibt die Anzeige trotzdem dauerhaft ONLINE. Kandidat
+  fuer einen echteren Ansatz: ONLINE nur solange zeigen, wie kuerzlich (z.B. letzte
+  N Minuten) tatsaechlich ein Paket empfangen wurde oder ein Heartbeat/ACK bestaetigt
+  wurde — nicht umgesetzt, siehe Fix-Plan.
 - `do_trigger_emergency` speichert die Meldung immer in `lage_db` (Status wandert
   „wird übermittelt" → „übermittelt"/„fehlgeschlagen") — unabhängig davon, ob wirklich
   etwas gesendet wurde.
 - Vorgangsnummer (`VG-<DB-ID>`) und Zeitstempel in der Notmeldungshistorie sind echt
   (DB-Rowid bzw. echte Wall-Clock-Sekunden, siehe `lageDbSetTimeProvider` in
   `main.cpp`) — vorausgesetzt die Uhr wurde gestellt (siehe Uhrzeit-Zeile oben).
-- Leitstellen-Node-Nummer (`dispatch set`) ist persistent in NVS, aber es gibt noch
-  keine UI dafür — nur Serial.
+- Leitstellen-Node-Nummer (`dispatch set`) ist persistent in NVS, seit 2026-09-18 auch
+  per Touchscreen setzbar (Einstellungen-Seite, PIN-geschützt) — kein Dropdown mit
+  "zertifizierten" Leitstellen, da es noch keine echte Liste davon gibt, nur ein
+  Freitextfeld für die Node-ID.
