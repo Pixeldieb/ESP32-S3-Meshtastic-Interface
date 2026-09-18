@@ -13,6 +13,7 @@
 #include "meshtastic/mesh.pb.h"
 #include "station_config.h"
 #include "ui_model.h"
+#include "wall_clock.h"
 
 // Every constant below is copied from meshtastic/firmware's own source
 // (read directly, not from memory) during the Issue #36 investigation on
@@ -294,14 +295,53 @@ void sendNodeInfo(uint32_t toNode) {
   sendData(toNode, data, g_publicChannel); // discovery always happens on the public channel
 }
 
+// Application-level acknowledgment (Issue B5, Testprotokoll 2026-09-18):
+// the ROUTING_APP ack in handleReceivedPacket() only proves the packet
+// reached *some* node's radio layer -- it fires before meshSecurityCheck()
+// even runs, so it can never prove the emergency report was actually
+// accepted and stored. This is our own, separate confirmation, sent back
+// as a normal PRIVATE_APP direct message ONLY after the report passed
+// meshSecurityCheck() and was written to the DB. Any counterpart (dispatch
+// station) that wants to give a real "wir haben es" guarantee instead of
+// just a transport-layer echo should reply the same way. Format deliberately
+// plain text like the rest of our wire protocol: "LAGE:ACK:<hex packetId>".
+void sendApplicationAck(uint32_t toNode, uint32_t requestPacketId, const MeshChannel &channel) {
+  char buf[32];
+  snprintf(buf, sizeof(buf), "LAGE:ACK:%08x", (unsigned)requestPacketId);
+
+  meshtastic_Data data = meshtastic_Data_init_zero;
+  data.portnum = meshtastic_PortNum_PRIVATE_APP;
+  size_t len = strlen(buf);
+  memcpy(data.payload.bytes, buf, len);
+  data.payload.size = len;
+
+  Serial.printf("[MESH] Sende Anwendungs-ACK \"%s\" an !%08x (Kanal \"%s\")\n", buf, (unsigned)toNode, channel.name);
+  sendData(toNode, data, channel, /*hopLimit=*/0);
+}
+
 // Same LAGE: wire format src/xiao/main.cpp parses (see main README
 // "Lagemeldungen (kayna-funkt)"). State short-codes (LGE/NOR/WTG/SAB/SAUS)
 // aren't handled here -- this board's UI doesn't have that state concept.
-void handleTextMessage(uint32_t from, const char *text) {
+void handleTextMessage(uint32_t from, uint32_t packetId, const MeshChannel &channel, const char *text) {
   ui_model_notify_rx();
   Serial.printf("[MESH] Text von !%08x: \"%s\"\n", (unsigned)from, text);
 
   String msg(text);
+
+  // Reply to our own emergency send, not a new report -- handle first,
+  // separately from the "LAGE:" report parsing below (see B5 comment on
+  // sendApplicationAck()). Only counts if it names the packet we're
+  // actually waiting on AND comes from the configured dispatch node --
+  // otherwise any node echoing a guessed/replayed id could fake success.
+  if (msg.startsWith("LAGE:ACK:")) {
+    uint32_t ackedId = strtoul(msg.c_str() + strlen("LAGE:ACK:"), nullptr, 16);
+    if (from == station_config().dispatchNodeNum && ackedId != 0 && ackedId == g_pendingEmergencyPacketId) {
+      g_emergencyAckReceived = true;
+      Serial.println("[MESH] Anwendungs-ACK der Leitstelle erhalten -- Notmeldung wirklich angenommen.");
+    }
+    return;
+  }
+
   if (!msg.startsWith("LAGE:")) return;
 
   String payload = msg.substring(5);
@@ -325,13 +365,19 @@ void handleTextMessage(uint32_t from, const char *text) {
   snprintf(fromBuf, sizeof(fromBuf), "!%08x", (unsigned)from);
   String fromNodeStr(fromBuf);
 
+  bool stored;
   if (isNew) {
     int id = lageDbCreate(kategorie, status, content, fromNodeStr);
     Serial.printf("[MESH] Neue Lagemeldung angelegt, ID %d\n", id);
+    stored = id > 0;
   } else {
     bool ok = lageDbUpdate(idPart.toInt(), kategorie, status, content, fromNodeStr);
     Serial.printf("[MESH] Lagemeldung %d %s\n", idPart.toInt(), ok ? "aktualisiert" : "nicht gefunden");
+    stored = ok;
   }
+
+  // Real acceptance confirmation -- see sendApplicationAck() comment.
+  if (stored) sendApplicationAck(from, packetId, channel);
 }
 
 void handleReceivedPacket(const uint8_t *buf, size_t len) {
@@ -373,6 +419,27 @@ void handleReceivedPacket(const uint8_t *buf, size_t len) {
                 (unsigned)header.from, (unsigned)header.to, channel->name, (int)data.portnum, (unsigned)data.payload.size, rssi,
                 snr);
 
+  // Explicitly requested (2026-09-18): a durable, queryable record of when
+  // the configured Leitstelle was last actually heard from -- any packet
+  // type counts (ACK, application ACK, NodeInfo, ...), since Meshtastic/
+  // LoRa has no separate "connection" step to log instead (see the B2
+  // rework's comment on why the old fake "Verbindung"-row was removed).
+  // Meant as the data source a future Krisenstab/Systeminfo page can
+  // finally show something real from. Throttled so a quick back-and-forth
+  // (e.g. our send immediately followed by its ACK) collapses into one
+  // entry instead of flooding the log.
+  uint32_t dispatchNode = station_config().dispatchNodeNum;
+  if (dispatchNode != 0 && header.from == dispatchNode) {
+    static unsigned long lastLeitstelleContactLoggedAt = 0;
+    unsigned long nowMs = millis();
+    if (nowMs - lastLeitstelleContactLoggedAt >= 2000) {
+      lastLeitstelleContactLoggedAt = nowMs;
+      char msg[64];
+      snprintf(msg, sizeof(msg), "Kontakt von Leitstelle !%08x (portnum=%d)", (unsigned)header.from, (int)data.portnum);
+      eventLog("system", msg);
+    }
+  }
+
   // NextHopRouter.cpp: "if (!perhapsRebroadcast(p) && isToUs(p) && p->want_ack)
   // sendAckNak(...)" -- only for packets addressed directly to us (not
   // broadcast), and only if the sender actually asked for one.
@@ -393,20 +460,24 @@ void handleReceivedPacket(const uint8_t *buf, size_t len) {
     size_t n = data.payload.size < sizeof(text) - 1 ? data.payload.size : sizeof(text) - 1;
     memcpy(text, data.payload.bytes, n);
     text[n] = '\0';
-    handleTextMessage(header.from, text);
+    handleTextMessage(header.from, header.id, *channel, text);
   } else if (data.portnum == meshtastic_PortNum_ROUTING_APP) {
     meshtastic_Routing routing = meshtastic_Routing_init_zero;
     pb_istream_t rstream = pb_istream_from_buffer(data.payload.bytes, data.payload.size);
     if (pb_decode(&rstream, meshtastic_Routing_fields, &routing) &&
         routing.which_variant == meshtastic_Routing_error_reason_tag) {
-      Serial.printf("[MESH] ACK von !%08x fuer unser Paket 0x%08x, error_reason=%d%s\n", (unsigned)header.from,
-                    (unsigned)data.request_id, (int)routing.error_reason,
-                    routing.error_reason == meshtastic_Routing_Error_NONE ? " (zugestellt)" : "");
-      if (data.request_id != 0 && data.request_id == g_pendingEmergencyPacketId &&
-          routing.error_reason == meshtastic_Routing_Error_NONE) {
-        g_emergencyAckReceived = true;
-        Serial.println("[MESH] Notmeldung von der Leitstelle bestaetigt!");
-      }
+      // Issue B5 (Testprotokoll 2026-09-18): this is a TRANSPORT ack --
+      // "a node claiming to be !header.from got our packet", sent by
+      // handleReceivedPacket()'s own addressedToUs+wantAck branch above
+      // *before* the receiving side's meshSecurityCheck() even runs. It
+      // does NOT prove the emergency report was accepted, only that it
+      // arrived somewhere. Logged for diagnostics only -- it must never
+      // set g_emergencyAckReceived; that's reserved for the real
+      // application-level "LAGE:ACK:" reply (see sendApplicationAck() /
+      // handleTextMessage()).
+      Serial.printf("[MESH] Transport-ACK von !%08x fuer unser Paket 0x%08x, error_reason=%d%s (KEINE Anwendungsbestaetigung)\n",
+                    (unsigned)header.from, (unsigned)data.request_id, (int)routing.error_reason,
+                    routing.error_reason == meshtastic_Routing_Error_NONE ? " (transportiert)" : "");
     }
   } else if (data.portnum == meshtastic_PortNum_NODEINFO_APP) {
     meshtastic_User user = meshtastic_User_init_zero;
@@ -417,6 +488,22 @@ void handleReceivedPacket(const uint8_t *buf, size_t len) {
     // Reply in kind so their app gets our identity right away, instead of
     // waiting for our next periodic broadcast.
     sendNodeInfo(header.from);
+  } else if (data.portnum == meshtastic_PortNum_POSITION_APP) {
+    // Real wall-clock time source (Testprotokoll A1/A4/F2, see wall_clock.h
+    // comment): Position.time is "usually not sent over the mesh, but sent
+    // from the phone so devices without GPS/RTC can set their clock" --
+    // exactly our situation. Prefer it over `timestamp` (GPS solution time,
+    // only meaningful if the position itself is valid) since `time` is the
+    // field meant for this.
+    meshtastic_Position position = meshtastic_Position_init_zero;
+    pb_istream_t pstream = pb_istream_from_buffer(data.payload.bytes, data.payload.size);
+    if (pb_decode(&pstream, meshtastic_Position_fields, &position)) {
+      if (position.time != 0) {
+        wallClockSetFromEpoch(position.time, "Mesh-Position");
+      } else if (position.timestamp != 0) {
+        wallClockSetFromEpoch(position.timestamp, "Mesh-Position (GPS)");
+      }
+    }
   }
 }
 
