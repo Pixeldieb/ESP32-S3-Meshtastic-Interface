@@ -220,6 +220,11 @@ bool meshtastic_proto_begin() {
   if (state == RADIOLIB_ERR_NONE) state = radio.setPreambleLength(kPreambleLength);
   if (state == RADIOLIB_ERR_NONE) state = radio.setCRC(true);
   if (state == RADIOLIB_ERR_NONE) state = radio.setOutputPower(kTxPowerDbm);
+  // Real firmware makes this a user setting (config.lora.sx126x_rx_boosted_gain,
+  // SX126xInterface.cpp); doesn't affect wire-format compatibility, only local
+  // receive sensitivity -- enabled here to give a real over-the-air test
+  // against another device the best chance of actually being heard.
+  if (state == RADIOLIB_ERR_NONE) state = radio.setRxBoostedGainMode(true);
 
   Serial.printf("[MESH] Meshtastic-Protokoll: Node !%08x, %.3f MHz, BW%.0f SF%d CR4/%d, Sync 0x%02x, Kanal-Hash 0x%02x (\"%s\")\n",
                 (unsigned)g_myNodeNum, freq, kBandwidthKHz, kSpreadingFactor, kCodingRate, kSyncWord, defaultChannelHash(),
