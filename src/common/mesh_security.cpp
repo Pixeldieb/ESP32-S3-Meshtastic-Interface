@@ -1,6 +1,7 @@
 #include "mesh_security.h"
 #include <Preferences.h>
 #include <limits.h>
+#include "lage_db.h"
 
 namespace {
 
@@ -91,8 +92,10 @@ bool meshSecurityCheck(uint32_t fromNode, bool isNewReport) {
   load(); // safe to call repeatedly, no-ops after the first real load
 
   if (!isAllowed(fromNode)) {
-    Serial.printf("[SECURITY] Lagemeldung von !%08x abgelehnt: Absender nicht auf der Allowlist.\n",
-                  (unsigned)fromNode);
+    char msg[64];
+    snprintf(msg, sizeof(msg), "Absender !%08x nicht auf der Allowlist", (unsigned)fromNode);
+    Serial.printf("[SECURITY] Lagemeldung abgelehnt: %s.\n", msg);
+    eventLog("sicherheit", msg);
     return false;
   }
 
@@ -100,9 +103,11 @@ bool meshSecurityCheck(uint32_t fromNode, bool isNewReport) {
     SenderRateState &state = rateSlotFor(fromNode);
     unsigned long now = millis();
     if (state.lastNeuAcceptedAt != 0 && (now - state.lastNeuAcceptedAt) < MIN_NEU_INTERVAL_MS) {
-      Serial.printf("[SECURITY] Neue Lagemeldung von !%08x abgelehnt: Ratenlimit (letzte vor %lums, "
-                    "Minimum %lums).\n",
-                    (unsigned)fromNode, now - state.lastNeuAcceptedAt, MIN_NEU_INTERVAL_MS);
+      char msg[80];
+      snprintf(msg, sizeof(msg), "Ratenlimit fuer !%08x (letzte vor %lums)", (unsigned)fromNode,
+               now - state.lastNeuAcceptedAt);
+      Serial.printf("[SECURITY] Neue Lagemeldung abgelehnt: %s.\n", msg);
+      eventLog("sicherheit", msg);
       return false;
     }
     state.lastNeuAcceptedAt = now;
@@ -118,6 +123,9 @@ bool meshSecurityAllow(uint32_t nodeNum) {
     if (g_allowed[i] == 0) {
       g_allowed[i] = nodeNum;
       persist();
+      char msg[48];
+      snprintf(msg, sizeof(msg), "!%08x zur Allowlist hinzugefuegt", (unsigned)nodeNum);
+      eventLog("system", msg);
       return true;
     }
   }
@@ -131,6 +139,9 @@ bool meshSecurityRevoke(uint32_t nodeNum) {
     if (g_allowed[i] == nodeNum) {
       g_allowed[i] = 0;
       persist();
+      char msg[48];
+      snprintf(msg, sizeof(msg), "!%08x von der Allowlist entfernt", (unsigned)nodeNum);
+      eventLog("system", msg);
       return true;
     }
   }

@@ -582,8 +582,10 @@ void setup() {
   if (lora_radio_begin() && meshtastic_proto_begin()) {
     ui_model_set_connected(true); // real signal: radio initialized and listening
     Serial.printf("[OK] Meshtastic bereit, Node !%08x\n", (unsigned)meshtastic_proto_my_node_num());
+    eventLog("system", "Boot: Meshtastic-Radio bereit");
   } else {
     Serial.println("[FEHLER] Meshtastic-Radio nicht bereit, bleibe OFFLINE");
+    eventLog("fehler", "Boot: Meshtastic-Radio NICHT bereit");
   }
   lvgl_last_tick = millis();
   Serial.println("[OK] setup complete");
@@ -592,6 +594,7 @@ void setup() {
   Serial.println("Leitstelle fuer Notmeldungen festlegen: dispatch set <hex-node-id, z.B. ce0ffa28>");
   Serial.println("Absender-Allowlist verwalten: allow add|revoke <hex-node-id>, allow list");
   Serial.println("Heartbeat sofort senden (laeuft sonst automatisch alle 2 Minuten): test heartbeat");
+  Serial.println("Lokales Ereignisprotokoll ansehen: events");
   Serial.println("Nur zum Testen (Status-UI ohne echten Zustand): testconnect on|off\n");
 }
 
@@ -640,6 +643,16 @@ void loop() {
       meshSecurityListAllowed();
     } else if (line == "test heartbeat") {
       meshtastic_send_heartbeat();
+    } else if (line == "events") {
+      // Issue #33: lokale Betriebshistorie, unabhaengig von der Leitstelle
+      // einsehbar -- hier per Serial, da es noch keine eigene UI-Seite dafuer gibt.
+      EventLogEntry events[20];
+      int count = eventLogGetRecent(events, 20);
+      Serial.printf("--- Ereignisprotokoll (%d) ---\n", count);
+      for (int i = 0; i < count; i++) {
+        Serial.printf("#%d [%lu] %s: %s\n", events[i].id, events[i].zeit, events[i].kategorie.c_str(),
+                      events[i].text.c_str());
+      }
     }
   }
 

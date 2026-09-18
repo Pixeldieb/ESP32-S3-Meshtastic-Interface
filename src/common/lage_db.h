@@ -29,3 +29,25 @@ struct LageMeldungSummary {
 // Fills `out` (capacity `maxCount`) with the most recently updated
 // Lagemeldungen, newest first. Returns how many were written.
 int lageDbGetRecentSummaries(LageMeldungSummary* out, int maxCount);
+
+// Issue #33: local, append-only log of operationally relevant events
+// (activations, sabotage alarms, errors, security rejections, ...) for
+// post-incident review, independent of whatever the Leitstelle did or did
+// not receive over the mesh. Separate table from lagemeldungen -- this is
+// about the STATION's own operational history, not the content of reports.
+// "kategorie" is a short free-form tag, not an enum, so callers can log new
+// kinds of events without a header change (e.g. "sicherheit", "system",
+// "sabotage", "aktivierung", "fehler") -- see EVENT_LOG_CLI section of the
+// respective board's README for the tags actually in use.
+void eventLog(const String& kategorie, const String& text);
+
+struct EventLogEntry {
+  int id;
+  unsigned long zeit;
+  String kategorie;
+  String text;
+};
+
+// Fills `out` (capacity `maxCount`) with the most recent events, newest
+// first. Returns how many were written.
+int eventLogGetRecent(EventLogEntry* out, int maxCount);

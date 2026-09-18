@@ -92,6 +92,12 @@ void onTextMessage(uint32_t from, uint32_t to, uint8_t channel, const char* text
       Serial.print("!!! Befehl '"); Serial.print(befehl.code);
       Serial.print("' empfangen, Zustand wechselt von "); Serial.print(zustandName(aktuellerZustand));
       Serial.print(" auf "); Serial.println(zustandName(befehl.zustand));
+      { // Issue #33: Zustandswechsel sind fuer die Nachbereitung relevant
+        char logMsg[64];
+        snprintf(logMsg, sizeof(logMsg), "%s -> %s (Befehl '%s')", zustandName(aktuellerZustand),
+                 zustandName(befehl.zustand), befehl.code);
+        eventLog("aktivierung", logMsg);
+      }
       aktuellerZustand = befehl.zustand;
       return;
     }
@@ -170,9 +176,18 @@ void handleSerialCommand(const String& cmd) {
                   meshSecurityRevoke(nodeNum) ? "entfernt" : "war nicht auf der Allowlist");
   } else if (cmd == "allow list") {
     meshSecurityListAllowed();
+  } else if (cmd == "events") {
+    // Issue #33: lokale Betriebshistorie, unabhaengig von der Leitstelle einsehbar.
+    EventLogEntry events[20];
+    int count = eventLogGetRecent(events, 20);
+    Serial.printf("--- Ereignisprotokoll (%d) ---\n", count);
+    for (int i = 0; i < count; i++) {
+      Serial.printf("#%d [%lu] %s: %s\n", events[i].id, events[i].zeit, events[i].kategorie.c_str(),
+                    events[i].text.c_str());
+    }
   } else if (cmd == "help") {
     Serial.println("Befehle: liste | liste kategorie <X> | liste status <X> | detail <ID> | status | "
-                    "allow add|revoke <hex-node-id> | allow list | help");
+                    "allow add|revoke <hex-node-id> | allow list | events | help");
   } else if (cmd.length() > 0) {
     Serial.println("Unbekannter Befehl. 'help' fuer Uebersicht.");
   }
@@ -204,6 +219,7 @@ void setup() {
     blinkWaiting();
     if (millis() - handshakeStart > HANDSHAKE_TIMEOUT_MS) {
       Serial.println(">>> WARNUNG: Config-Handshake nach 15s nicht abgeschlossen, mache trotzdem weiter.");
+      eventLog("fehler", "Config-Handshake nach 15s nicht abgeschlossen");
       break;
     }
   }
@@ -211,6 +227,7 @@ void setup() {
   set_text_message_callback(onTextMessage); // NACH erfolgtem Handshake registrieren
 
   Serial.println(">>> VERBUNDEN mit der Node. Tippe 'help' fuer CLI-Befehle.");
+  eventLog("system", "Boot: verbunden mit Meshtastic-Node");
 
   // --- Erfolg: 5x schnell blinken ---
   blinkFast(5, 100);

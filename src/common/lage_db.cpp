@@ -56,6 +56,15 @@ bool lageDbBegin() {
     " neuer_status TEXT,"
     " from_node TEXT);"
   );
+  // Issue #33: separate von lagemeldungen -- das hier ist die Betriebs-
+  // historie der Saeule selbst (Aktivierungen, Sicherheits-Ablehnungen,
+  // Fehler, ...), nicht der Inhalt der Lagemeldungen.
+  execSimple(
+    "CREATE TABLE IF NOT EXISTS ereignisse ("
+    " zeit INTEGER,"
+    " kategorie TEXT,"
+    " text TEXT);"
+  );
   return true;
 }
 
@@ -167,6 +176,37 @@ int lageDbGetRecentSummaries(LageMeldungSummary* out, int maxCount) {
     out[count].status = String((const char*)sqlite3_column_text(stmt, 2));
     out[count].text = String((const char*)sqlite3_column_text(stmt, 3));
     out[count].updatedAt = (unsigned long)sqlite3_column_int64(stmt, 4);
+    count++;
+  }
+  sqlite3_finalize(stmt);
+  return count;
+}
+
+void eventLog(const String& kategorie, const String& text) {
+  Serial.printf("[EVENT] %s: %s\n", kategorie.c_str(), text.c_str());
+  if (!db) return; // z.B. lageDbBegin() fehlgeschlagen -- nicht crashen, nur nicht persistieren
+  sqlite3_stmt* stmt;
+  const char* sql = "INSERT INTO ereignisse (zeit, kategorie, text) VALUES (?, ?, ?);";
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return;
+  sqlite3_bind_int64(stmt, 1, lageDbNow());
+  sqlite3_bind_text(stmt, 2, kategorie.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 3, text.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+}
+
+int eventLogGetRecent(EventLogEntry* out, int maxCount) {
+  const char* sql = "SELECT rowid, zeit, kategorie, text FROM ereignisse ORDER BY zeit DESC LIMIT ?;";
+  sqlite3_stmt* stmt;
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return 0;
+  sqlite3_bind_int(stmt, 1, maxCount);
+
+  int count = 0;
+  while (count < maxCount && sqlite3_step(stmt) == SQLITE_ROW) {
+    out[count].id = sqlite3_column_int(stmt, 0);
+    out[count].zeit = (unsigned long)sqlite3_column_int64(stmt, 1);
+    out[count].kategorie = String((const char*)sqlite3_column_text(stmt, 2));
+    out[count].text = String((const char*)sqlite3_column_text(stmt, 3));
     count++;
   }
   sqlite3_finalize(stmt);

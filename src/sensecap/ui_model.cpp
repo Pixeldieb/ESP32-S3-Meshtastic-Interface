@@ -378,6 +378,14 @@ void transmission_failed_cancel_cb(lv_event_t *e) {
 }
 
 void finish_transmission(bool success) {
+  // Issue #33: die Aktivierung/Meldung selbst gehoert in die Betriebshistorie,
+  // unabhaengig davon ob die Leitstelle sie am Ende bestaetigt hat oder nicht.
+  {
+    char msg[96];
+    snprintf(msg, sizeof(msg), "Notmeldung VG-%04d (%s) %s", g_transmission_db_id, g_selected.category,
+             success ? "zugestellt" : "fehlgeschlagen");
+    eventLog(success ? "aktivierung" : "fehler", msg);
+  }
   if (success) {
     lageDbUpdate(g_transmission_db_id, g_selected.category, "uebermittelt",
                  g_selected.label, "!lokal-touch");
