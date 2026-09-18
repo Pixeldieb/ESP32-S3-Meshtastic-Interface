@@ -1,6 +1,6 @@
 <div align="center">
 
-# ESP32-S3 Interface for Meshtastic (vibe coded prototype)
+# kayna-funkt Notmeldeterminal (vibe coded prototype)
 
 ![Platform](https://img.shields.io/badge/platform-ESP32--S3-10537E?style=flat-square)
 ![Framework](https://img.shields.io/badge/framework-Arduino%20%2F%20PlatformIO-04A098?style=flat-square)
@@ -8,7 +8,14 @@
 ![Status](https://img.shields.io/badge/status-prototype%20%E2%80%94%20kayna--funkt-lightgrey?style=flat-square)
 ![AI Slopmaker](https://img.shields.io/badge/Anthropic%20Claude%20Sonnet%205%20High)
 
-Ein Seeed XIAO ESP32-S3 verbindet sich per UART mit einer Meshtastic-Node (Seeed XIAO nRF52) und dient als Prototyp für die Versendung und Speicherung von **Leitstellen-Lagemeldungen** — Teil des Notmeldestellen-Projekts **kayna-funkt**.
+Ein Meshtastic-basiertes Notmeldeterminal für abgesetzte Standorte ohne
+Mobilfunk-/Internetanbindung — Teil des Notmeldestellen-Projekts **kayna-funkt**.
+Zwei Hardware-Wege werden verfolgt: ein eigenständiges Touchscreen-Terminal
+(**SenseCAP Indicator**, eingebautes LoRa-Funkmodul, aktueller Entwicklungsfokus)
+und ein serieller Prototyp (**Seeed XIAO ESP32-S3** + externe Meshtastic-Node
+über UART, ursprünglicher Ausgangspunkt des Projekts). Frühere Titel dieses
+Repos ("ESP32-S3 Interface for Meshtastic") beschrieben nur noch den zweiten,
+mittlerweile nicht mehr priorisierten Weg — siehe [Wiki](https://github.com/Pixeldieb/kayna-funkt-notmeldeterminal/wiki) für den aktuellen Gesamtüberblick.
 
 </div>
 
@@ -163,7 +170,7 @@ Aktuellen Zustand abfragen: Serial-Befehl `status`.
 
 > 📌 **Aktueller Stand:** Nur der reine Zustandswechsel ist implementiert, noch ohne Prüfung, ob der Absender berechtigt ist (siehe Troubleshooting/Security-Hinweis unten). Automatische Erkennung von Stromausfall/Sabotage über Hardware sowie die Leitstellen-Anbindung folgen in späteren Schritten.
 
-> 🔐 **Sicherheitshinweis:** Aktuell kann jede Node im selben Mesh-Kanal per Kurz-Code den Zustand der Säule ändern — es gibt noch keine Absender-Prüfung. Für den Feldtest tragbar, vor einem echten Einsatz muss das über eine Absender-Allowlist abgesichert werden (siehe [Issue #1](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/1) im Hauptrepo).
+> 🔐 **Sicherheitshinweis:** Aktuell kann jede Node im selben Mesh-Kanal per Kurz-Code den Zustand der Säule ändern — es gibt noch keine Absender-Prüfung. Für den Feldtest tragbar, vor einem echten Einsatz muss das über eine Absender-Allowlist abgesichert werden (siehe [Issue #1](https://github.com/Pixeldieb/kayna-funkt-notmeldeterminal/issues/1) im Hauptrepo).
 
 ---
 
@@ -271,14 +278,14 @@ Kurzstand: Display/Touch/Menü/Datenbank laufen stabil. Meshtastic-Anbindung lä
 Verschlüsselung, Kanal-Hash — kein rohes/inkompatibles Signal) und ist gegen ein
 reales Meshtastic-Gerät verifiziert: Broadcast bidirektional, Direktnachricht mit
 echter Zustellbestätigung (ROUTING_APP-ACK) an eine konfigurierbare Leitstelle.
-Details im [Wiki](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/wiki/SenseCAP-Meshtastic)
-und in [Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/36).
+Details im [Wiki](https://github.com/Pixeldieb/kayna-funkt-notmeldeterminal/wiki/SenseCAP-Meshtastic)
+und in [Issue #36](https://github.com/Pixeldieb/kayna-funkt-notmeldeterminal/issues/36).
 
 ---
 
 ## 🔗 Weiterführende Links
 
-- [Projekt-Wiki](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/wiki) — Status-Dashboard über beide Boards und alle Themenbereiche
+- [Projekt-Wiki](https://github.com/Pixeldieb/kayna-funkt-notmeldeterminal/wiki) — Status-Dashboard über beide Boards und alle Themenbereiche
 - [Seeed XIAO ESP32-S3 – Getting Started](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/)
 - [Meshtastic – Offizielle Dokumentation](https://meshtastic.org/docs/)
 - [Meshtastic – Serial Module Konfiguration](https://meshtastic.org/docs/configuration/module/serial/)
@@ -298,7 +305,7 @@ und in [Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/is
   nachgebaut (Frequenz/BW/SF/CR/Sync/Präambel ebenso). Protobuf-Definitionen nicht
   handkodiert, sondern nanopb + Meshtastics eigene generierte Header vendored
   (`lib/meshtastic_proto/`). Details: [src/sensecap/README.md](src/sensecap/README.md)
-  Abschnitt 5, [Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/36).
+  Abschnitt 5, [Issue #36](https://github.com/Pixeldieb/kayna-funkt-notmeldeterminal/issues/36).
 - Die alte externe-Node-Bridge (`meshtastic_bridge.h/.cpp`, Weg 2) für dieses Board
   entfernt — endgültig nicht machbar (kein freier GPIO, RP2040-Co-Prozessor hat keine
   Hardware-Verbindung zum SX1262, siehe Board-README).
@@ -310,14 +317,14 @@ und in [Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/is
   `ROUTING_APP`-ACK an eine konfigurierbare Leitstelle). NodeInfo-Austausch ergänzt.
   Nebenbei einen unabhängigen, bis dahin unbemerkten Bug gefunden: `lageDbBegin()`
   fehlte auf diesem Board komplett, die Notmeldungshistorie lief seit Board-Einführung
-  ins Leere. Details im [Wiki](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/wiki/SenseCAP-Meshtastic).
-- **Sicherheitslücken aus der Codebase-Analyse geschlossen** ([#1](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/1),
-  [#3](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/3)): eingehende
+  ins Leere. Details im [Wiki](https://github.com/Pixeldieb/kayna-funkt-notmeldeterminal/wiki/SenseCAP-Meshtastic).
+- **Sicherheitslücken aus der Codebase-Analyse geschlossen** ([#1](https://github.com/Pixeldieb/kayna-funkt-notmeldeterminal/issues/1),
+  [#3](https://github.com/Pixeldieb/kayna-funkt-notmeldeterminal/issues/3)): eingehende
   Lagemeldungen (und auf dem XIAO-Board die Zustands-Kurzcodes) wurden von jedem
   Absender ungeprüft übernommen. Neues gemeinsames Modul `src/common/mesh_security.h`
   mit Absender-Allowlist (sicherer Default: leer = alles verwerfen, nicht alles
   erlauben) und Ratenbegrenzung, in beide Boards eingebaut.
-- **Heartbeat-Telemetrie** ([#13](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/13)):
+- **Heartbeat-Telemetrie** ([#13](https://github.com/Pixeldieb/kayna-funkt-notmeldeterminal/issues/13)):
   SenseCAP-Board sendet periodisch einen Status-Broadcast, damit eine Leitstelle
   eine ausgefallene Station am ausbleibenden Lebenszeichen erkennt — ehrlich ohne
   Akku-/Sabotage-Werte, da dafür noch keine Sensorik existiert.
@@ -337,7 +344,7 @@ und in [Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/is
   zuverlässig rohes LoRa (Reset-Settle-Timing-Fix, nicht das vermutete BUSY-Timing).
   Externe Node über UART bleibt aus GPIO-Mangel verworfen. Echte Meshtastic-Protokoll-
   Kompatibilität (Verschlüsselung/Routing/Kanäle) ist der jetzt eigentliche offene
-  Punkt — strategische Scope-Frage, dokumentiert in [Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/36).
+  Punkt — strategische Scope-Frage, dokumentiert in [Issue #36](https://github.com/Pixeldieb/kayna-funkt-notmeldeterminal/issues/36).
 - `src/` neu strukturiert für mehrere Boards: `src/xiao/`, `src/common/`
   (gemeinsam genutztes `lage_db`), `src/sensecap/`.
 

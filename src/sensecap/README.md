@@ -102,8 +102,8 @@ RELEASED-Events, kein eigenes Touch-Polling mehr nötig).
 
 ## 5. Meshtastic-Anbindung
 
-Siehe **[Issue #36](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/issues/36)**
-für den vollen Verlauf, und das [Wiki](https://github.com/Pixeldieb/ESP32-S3-Meshtastic-Interface/wiki/SenseCAP-Meshtastic)
+Siehe **[Issue #36](https://github.com/Pixeldieb/kayna-funkt-notmeldeterminal/issues/36)**
+für den vollen Verlauf, und das [Wiki](https://github.com/Pixeldieb/kayna-funkt-notmeldeterminal/wiki/SenseCAP-Meshtastic)
 für die kompakte Status-Zusammenfassung. Kurzfassung, Stand 2026-09-18 (autonome
 Nachtsession + Live-Test-Folgesession am selben Tag):
 
