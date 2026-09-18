@@ -16,13 +16,21 @@ struct StationConfig {
   // reports are sent to as a direct message (so we can get a real
   // delivery ACK -- Meshtastic never acks broadcasts, see
   // meshtastic_proto.cpp). 0 = not configured yet; set via the
-  // "dispatch set <hex-node-id>" serial command until there's a real
-  // onboarding UI for it.
+  // "dispatch set <hex-node-id>" serial command (main.cpp) until there's a
+  // real onboarding UI for it. Persisted to NVS (see
+  // station_config_set_dispatch_node()) -- found live 2026-09-18 that an
+  // in-memory-only value was a real problem: it silently reset to 0 on
+  // every reboot/reflash during testing, causing sends that looked
+  // identical to previously-working ones to fail with no code change.
   uint32_t dispatchNodeNum = 0;
 };
 
-// Single shared instance. A later onboarding flow would load/save this
-// from/to flash (e.g. Preferences/NVS) instead of returning a hardcoded
-// struct — callers should go through this accessor either way so that
-// swap-in doesn't touch call sites.
+// Single shared instance. Other fields are hardcoded for now (see the
+// struct comment) — callers should go through this accessor either way so
+// a future onboarding flow's load/save doesn't need to touch call sites.
 StationConfig &station_config();
+
+// Sets dispatchNodeNum (both in the live StationConfig and persisted to
+// NVS, so it survives the next reboot/reflash) — use this instead of
+// assigning station_config().dispatchNodeNum directly.
+void station_config_set_dispatch_node(uint32_t nodeNum);

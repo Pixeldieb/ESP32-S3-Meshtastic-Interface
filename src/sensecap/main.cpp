@@ -609,7 +609,7 @@ void loop() {
       meshtastic_proto_send_text(line.substring(10).c_str());
     } else if (line.startsWith("dispatch set ")) {
       uint32_t nodeNum = strtoul(line.substring(13).c_str(), nullptr, 16);
-      station_config().dispatchNodeNum = nodeNum;
+      station_config_set_dispatch_node(nodeNum);
       Serial.printf("[OK] Leitstelle fuer Notmeldungen gesetzt: !%08x\n", (unsigned)nodeNum);
     } else if (line == "test emergency") {
       // Exercises the exact same path as the touchscreen hold-confirm
