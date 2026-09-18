@@ -591,6 +591,7 @@ void setup() {
   Serial.println("Testnachricht senden: mesh send <text>");
   Serial.println("Leitstelle fuer Notmeldungen festlegen: dispatch set <hex-node-id, z.B. ce0ffa28>");
   Serial.println("Absender-Allowlist verwalten: allow add|revoke <hex-node-id>, allow list");
+  Serial.println("Heartbeat sofort senden (laeuft sonst automatisch alle 2 Minuten): test heartbeat");
   Serial.println("Nur zum Testen (Status-UI ohne echten Zustand): testconnect on|off\n");
 }
 
@@ -637,7 +638,21 @@ void loop() {
                     meshSecurityRevoke(nodeNum) ? "entfernt" : "war nicht auf der Allowlist");
     } else if (line == "allow list") {
       meshSecurityListAllowed();
+    } else if (line == "test heartbeat") {
+      meshtastic_send_heartbeat();
     }
+  }
+
+  // Issue #13: periodic presence so a Leitstelle watching several stations
+  // notices one going silent. Interval is deliberately short for today's
+  // testing (2 min) -- for a real deployment this should be tuned way up
+  // (e.g. 15-30 min) to respect EU868's duty-cycle limit, see
+  // meshtastic_send_heartbeat()'s comment.
+  static unsigned long lastHeartbeatAt = 0;
+  const unsigned long HEARTBEAT_INTERVAL_MS = 2UL * 60 * 1000;
+  if (now - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {
+    lastHeartbeatAt = now;
+    meshtastic_send_heartbeat();
   }
 
 #if UI_MINIMAL_TEST

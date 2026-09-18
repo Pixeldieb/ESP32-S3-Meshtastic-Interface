@@ -58,6 +58,15 @@ bool meshtastic_send_emergency(const char *category, const char *type, const cha
 // false at the start of each new meshtastic_send_emergency() call.
 bool meshtastic_proto_emergency_ack_received();
 
+// Broadcasts a periodic status ("STATUS:<station>;uptime=...;zustand=...;
+// akku=n/v;sabotage=n/v") on the private channel, so a Leitstelle watching
+// several stations can notice one going silent (Issue #13). Battery and
+// sabotage fields are honestly "n/v" (not available) -- no sensors for
+// either exist on this board yet (Issues #5, #7). Call periodically from
+// loop() (main.cpp), not on a tight timer -- once every few minutes is
+// plenty for outage detection and keeps airtime/duty-cycle usage low.
+bool meshtastic_send_heartbeat();
+
 // Our own node number (derived from the ESP32's factory MAC, like real
 // Meshtastic firmware does) -- logged at startup, useful for identifying
 // this device's packets in a real Meshtastic app while testing.

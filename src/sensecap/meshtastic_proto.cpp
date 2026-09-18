@@ -572,3 +572,32 @@ bool meshtastic_send_emergency(const char *category, const char *type, const cha
 bool meshtastic_proto_emergency_ack_received() { return g_emergencyAckReceived; }
 
 uint32_t meshtastic_proto_my_node_num() { return g_myNodeNum; }
+
+// Issue #13: periodic status so the Leitstelle can notice a station going
+// silent, not just receive emergency reports. Broadcast (not a direct
+// message -- no ACK expected or needed, same "presence" pattern real
+// Meshtastic firmware uses for its own periodic NodeInfo broadcasts) on the
+// private channel, since station health is kayna-funkt-internal operational
+// info, not something the public channel needs to see.
+//
+// Deliberately honest about what this board can't actually measure yet:
+// battery/solar state (Issue #5) and sabotage detection (Issue #7) don't
+// exist in hardware, so this reports "n/v" (nicht verfuegbar) for both
+// instead of inventing plausible-looking numbers. Only uptime and the
+// station ID are real. No Zustandsmodell (Issue #10) on this board yet
+// either, so there's no real "Betriebszustand" to report beyond "laeuft".
+bool meshtastic_send_heartbeat() {
+  char buf[160];
+  snprintf(buf, sizeof(buf), "STATUS:%s;uptime=%lus;zustand=laeuft;akku=n/v;sabotage=n/v",
+           station_config().stationId.c_str(), millis() / 1000);
+
+  meshtastic_Data data = meshtastic_Data_init_zero;
+  data.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
+  size_t textLen = strlen(buf);
+  if (textLen > sizeof(data.payload.bytes)) textLen = sizeof(data.payload.bytes);
+  memcpy(data.payload.bytes, buf, textLen);
+  data.payload.size = textLen;
+
+  Serial.printf("[MESH] Sende Heartbeat \"%s\" (Kanal \"%s\", Broadcast)\n", buf, g_privateChannel.name);
+  return sendData(kNodenumBroadcast, data, g_privateChannel);
+}
