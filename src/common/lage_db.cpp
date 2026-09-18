@@ -3,6 +3,11 @@
 #include "sqlite3.h"
 
 static sqlite3* db = nullptr;
+static LageDbTimeFn g_timeFn = nullptr;
+
+void lageDbSetTimeProvider(LageDbTimeFn fn) { g_timeFn = fn; }
+
+static unsigned long lageDbNow() { return g_timeFn ? g_timeFn() : millis(); }
 
 static bool execSimple(const char* sql) {
   char* errMsg = nullptr;
@@ -60,7 +65,7 @@ int lageDbCreate(const String& kategorie, const String& status, const String& te
                      "VALUES (?, ?, ?, ?, ?, ?);";
   if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return -1;
 
-  unsigned long now = millis();
+  unsigned long now = lageDbNow();
   sqlite3_bind_text(stmt, 1, kategorie.c_str(), -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(stmt, 2, status.c_str(), -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(stmt, 3, text.c_str(), -1, SQLITE_TRANSIENT);
@@ -89,7 +94,7 @@ bool lageDbUpdate(int id, const String& kategorie, const String& status, const S
   String alterStatus = String((const char*)sqlite3_column_text(sel, 1));
   sqlite3_finalize(sel);
 
-  unsigned long now = millis();
+  unsigned long now = lageDbNow();
 
   sqlite3_stmt* hist;
   const char* histSql = "INSERT INTO lage_historie "

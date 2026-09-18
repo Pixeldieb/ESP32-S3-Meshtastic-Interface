@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <lvgl.h>
+#include <time.h>
 
 #include "lage_db.h"
 #include "meshtastic_proto.h"
@@ -67,10 +68,11 @@ lv_obj_t *g_scr_emergency_details = nullptr;
 lv_obj_t *g_emergency_details_label = nullptr;
 lv_obj_t *g_scr_transmission = nullptr;
 lv_obj_t *g_transmission_label = nullptr;
+lv_obj_t *g_transmission_bar = nullptr;
+lv_obj_t *g_transmission_stage_label = nullptr;
 lv_obj_t *g_scr_transmission_failed = nullptr;
 lv_obj_t *g_transmission_failed_label = nullptr;
 lv_obj_t *g_scr_history = nullptr;
-int g_case_number_counter = 0;
 
 lv_obj_t *g_confirm_label = nullptr;
 lv_obj_t *g_confirm_back_target = nullptr;
@@ -92,6 +94,23 @@ const unsigned long EMERGENCY_ACK_TIMEOUT_MS = 8000;
 bool g_transmission_pending = false;
 unsigned long g_transmission_started_at = 0;
 int g_transmission_db_id = -1;
+
+// Stage narration for the sending screen: real steps (encode/encrypt already
+// happened by the time this screen even shows, radio send happened
+// synchronously in start_transmission(), then we wait on the real ACK) told
+// at a pace a human can read instead of flashing past instantly. This is
+// pacing for an operation that already happened/is happening, not a fake
+// countdown pretending toward an outcome we don't know yet — the actual
+// result still only ever comes from g_last_send_ok / the real ACK.
+int g_transmission_stage = 0;
+const unsigned long STAGE2_AT_MS = 600;  // "wird gesendet"
+const unsigned long STAGE3_AT_MS = 1400; // "warte auf Bestaetigung" (only if locally sent OK)
+
+void set_transmission_stage(int stage, const char *text, int barPercent) {
+  g_transmission_stage = stage;
+  if (g_transmission_stage_label) lv_label_set_text(g_transmission_stage_label, text);
+  if (g_transmission_bar) lv_bar_set_value(g_transmission_bar, barPercent, LV_ANIM_ON);
+}
 
 // Whether we have a real Meshtastic link. Set by main.cpp's setup() once
 // lora_radio_begin() + meshtastic_proto_begin() both succeed (real onboard
@@ -326,6 +345,7 @@ bool g_last_send_ok = false;
 void start_transmission(const char *sending_verb) {
   lv_label_set_text_fmt(g_transmission_label, "%s\n\n" LV_SYMBOL_LOOP " %s ...",
                         g_selected.label, sending_verb);
+  set_transmission_stage(1, "Verbindung zur Leitstelle wird aufgebaut...", 15);
   g_last_send_ok = meshtastic_send_emergency(g_selected.category, g_selected.type, g_selected.label);
   g_transmission_pending = true;
   g_transmission_started_at = millis();
@@ -338,7 +358,6 @@ void do_trigger_emergency() {
   g_hold_in_progress = false;
   if (g_hold_bar) lv_bar_set_value(g_hold_bar, 0, LV_ANIM_OFF);
 
-  g_case_number_counter++;
   g_transmission_db_id = lageDbCreate(g_selected.category, "wird uebermittelt",
                                       g_selected.label, "!lokal-touch");
   start_transmission("Meldung wird gesendet");
@@ -370,7 +389,7 @@ void finish_transmission(bool success) {
         "Notfallsaeule: %s\n"
         "Ort: unbekannt (kein GPS)\n\n"
         "Bitte notieren.",
-        g_selected.label, g_case_number_counter, format_timestamp().c_str(),
+        g_selected.label, g_transmission_db_id, format_timestamp().c_str(),
         station_config().stationId.c_str());
     nav_to(g_scr_emergency_details);
   } else {
@@ -557,16 +576,27 @@ lv_obj_t *build_history_page(lv_obj_t *back_target) {
       lv_obj_set_style_pad_all(card, 8, 0);
       lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
-      lv_obj_t *header = lv_label_create(card);
-      lv_label_set_text_fmt(header, "#%d  %s", rows[i].id, rows[i].status.c_str());
-      lv_obj_set_style_text_color(header, lv_color_hex(COLOR_PRIMARY_BLUE), 0);
-      lv_obj_set_style_text_font(header, &lv_font_montserrat_16, 0);
+      // Single label per entry (was card+header+body, 3 LVGL objects) --
+      // fewer widgets to lay out/redraw per entry, which is the leading
+      // suspect for the pixelation reported on this page (2026-09-18 live
+      // test) given simpler screens elsewhere never showed it. Also reads
+      // more like a technical log now: case number + real timestamp (see
+      // lageDbSetTimeProvider() in main.cpp) recolored to stand out from
+      // the status/text lines.
+      time_t t = (time_t)rows[i].updatedAt;
+      struct tm tmv;
+      localtime_r(&t, &tmv);
+      char timeBuf[20];
+      snprintf(timeBuf, sizeof(timeBuf), "%04d-%02d-%02d %02d:%02d:%02d", tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
+               tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
 
-      lv_obj_t *body = lv_label_create(card);
-      lv_label_set_text(body, rows[i].text.c_str());
-      lv_obj_set_style_text_font(body, &lv_font_montserrat_14, 0);
-      lv_label_set_long_mode(body, LV_LABEL_LONG_WRAP);
-      lv_obj_set_width(body, LV_PCT(100));
+      lv_obj_t *entry = lv_label_create(card);
+      lv_label_set_recolor(entry, true);
+      lv_label_set_text_fmt(entry, "#10537e VG-%04d  %s#\n%s\n%s", rows[i].id, timeBuf, rows[i].status.c_str(),
+                            rows[i].text.c_str());
+      lv_obj_set_style_text_font(entry, &lv_font_montserrat_14, 0);
+      lv_label_set_long_mode(entry, LV_LABEL_LONG_WRAP);
+      lv_obj_set_width(entry, LV_PCT(100));
     }
   }
   if (!any) {
@@ -822,9 +852,12 @@ void ui_model_build() {
     build_context_bar(g_scr_emergency_details, ctx_details);
   }
 
-  // emergency_transmission: shown while "sending" (simulated — see
-  // do_trigger_emergency/finish_transmission). No context bar at all:
+  // emergency_transmission: shown while sending. No context bar at all:
   // nothing to do here but wait, matching ui.yaml (no buttons listed).
+  // The stage bar/label below narrate real steps (radio send, then
+  // waiting for the dispatch node's ACK) at a pace a human can actually
+  // read, not a fake randomized delay — see ui_model_tick()'s handling of
+  // g_transmission_pending for what actually drives each stage.
   g_scr_transmission = make_screen("Notfall wird uebermittelt");
   {
     int32_t top = content_top(true);
@@ -834,6 +867,21 @@ void ui_model_build() {
     lv_obj_set_style_text_align(g_transmission_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(g_transmission_label, SCR - 40);
     lv_obj_set_pos(g_transmission_label, 20, top + 60);
+
+    g_transmission_bar = lv_bar_create(g_scr_transmission);
+    lv_obj_set_size(g_transmission_bar, SCR - 80, 22);
+    lv_obj_set_pos(g_transmission_bar, 40, top + 150);
+    lv_bar_set_range(g_transmission_bar, 0, 100);
+    lv_obj_set_style_bg_color(g_transmission_bar, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_bg_opa(g_transmission_bar, LV_OPA_30, 0);
+    lv_obj_set_style_bg_color(g_transmission_bar, lv_color_hex(COLOR_TEAL), LV_PART_INDICATOR);
+
+    g_transmission_stage_label = lv_label_create(g_scr_transmission);
+    lv_obj_set_style_text_color(g_transmission_stage_label, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(g_transmission_stage_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_align(g_transmission_stage_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(g_transmission_stage_label, SCR - 40);
+    lv_obj_set_pos(g_transmission_stage_label, 20, top + 185);
   }
 
   g_scr_transmission_failed = make_screen("Uebertragung fehlgeschlagen");
@@ -888,6 +936,17 @@ void ui_model_tick() {
   // depends on whether the radio even accepted the send locally:
   if (g_transmission_pending) {
     unsigned long elapsed = now - g_transmission_started_at;
+
+    // Stage narration (see set_transmission_stage()'s comment) -- purely
+    // pacing how the already-known local result is revealed, never a fake
+    // outcome.
+    if (g_transmission_stage < 2 && elapsed >= STAGE2_AT_MS) {
+      set_transmission_stage(2, "Notmeldung wird gesendet...", 45);
+    }
+    if (g_transmission_stage < 3 && elapsed >= STAGE3_AT_MS && g_last_send_ok) {
+      set_transmission_stage(3, "Warte auf Bestaetigung der Leitstelle...", 75);
+    }
+
     if (!g_last_send_ok) {
       // Local send already failed (no dispatch configured, radio error) --
       // nothing to wait for. Same short delay as before just so
@@ -899,6 +958,7 @@ void ui_model_tick() {
     } else if (meshtastic_proto_emergency_ack_received()) {
       // A real ROUTING_APP ACK came back from the dispatch node -- genuine
       // delivery confirmation, finish as soon as it arrives.
+      set_transmission_stage(4, "Von der Leitstelle bestaetigt!", 100);
       g_transmission_pending = false;
       finish_transmission(true);
     } else if (elapsed >= EMERGENCY_ACK_TIMEOUT_MS) {

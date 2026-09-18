@@ -19,6 +19,7 @@
 #include <Wire.h>
 #include <esp32s3/rom/cache.h>
 #include <driver/uart.h>
+#include <time.h>
 
 // LVGL must be included before Arduino_GFX to avoid conflicts.
 #define LV_CONF_INCLUDE_SIMPLE
@@ -26,6 +27,7 @@
 #include <Arduino_GFX_Library.h>
 
 #include "io_expander.h"
+#include "lage_db.h"
 #include "lora_radio.h"
 #include "meshtastic_proto.h"
 #include "station_config.h"
@@ -536,6 +538,27 @@ void setup() {
   }
 
   wallClockSetFromBuildTime(); // "vorerst" — see wall_clock.h; settime overrides
+
+  // BUG FIX (found live 2026-09-18): this call was simply missing on this
+  // board (present on src/xiao/main.cpp, never ported over here) -- without
+  // it `db` in lage_db.cpp stays nullptr forever, so every lageDbCreate/
+  // lageDbUpdate/lageDbGetRecentSummaries call has been silently failing.
+  // Symptom that surfaced it: Notmeldungshistorie always showing empty,
+  // with no crash (SQLite quietly errors out on a null handle instead of
+  // asserting) -- looked like a rendering bug, was actually "never wrote
+  // anything to persist in the first place".
+  if (!lageDbBegin()) {
+    Serial.println("[FEHLER] lage_db konnte nicht initialisiert werden");
+  }
+  // lage_db.cpp is shared with src/xiao (no real clock there), so it
+  // defaults to millis(). This board has wall_clock.h (set from build time
+  // above, refinable via `settime`) -- use real epoch seconds instead, so
+  // Notmeldungshistorie shows an actual date/time, not just uptime.
+  lageDbSetTimeProvider([]() -> unsigned long {
+    time_t t;
+    time(&t);
+    return (unsigned long)t;
+  });
 
 #if UI_MINIMAL_TEST
   build_minimal_ui();
